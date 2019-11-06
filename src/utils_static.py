@@ -47,17 +47,23 @@ def normal_stop_name(name):
 
     return name
 
-def normal_time(time):
-    return ":".join(["0" + i if len(i) == 1 else i for i in (time.split(".") + ["00"])])
+def normal_time(time, lessthen24=False):
+    h, m = map(int, time.split("."))
+    if lessthen24:
+        while h >= 24: h -= 24
+    return f"{h:0>2}:{m:0>2}:00"
 
-def should_town_be_added_to_name(stop_ref, stop_name, town_name, town_code):
-    stop_name, town_name = map(str.upper, (stop_name, town_name))
-    if town_code == "--": return False # Warsaw
-    elif stop_ref[1:3] in {"90", "91", "92"}: return False # Rail Stops
-    elif "PKP" in stop_name: return False
-    elif town_name in stop_name: return False
-    for town_part_name in town_name.split(" "):
-        if town_part_name in stop_name:
+def should_town_be_added_to_name(group):
+    group_name = group["name"].upper(),
+    group_town = group["town"].upper()
+    group_code = group["town_code"].upper()
+
+    if group_code == "--": return False # Warsaw
+    elif group["id"][1:3] in {"90", "91", "92"}: return False # Rail Stops
+    elif "PKP" in group_name: return False
+    elif group_town in group_name: return False
+    for town_part_name in group_town.split(" "):
+        if town_part_name in group_name:
             return False
     return True
 
@@ -69,6 +75,36 @@ def proper_headsign(stop_id, stop_name):
     elif stop_id in ["606107", "606108"]: return "Zjazd do zajezdni Żoliborz"
     elif stop_id.startswith("4202"): return "Lotnisko Chopina"
     else: return stop_name
+
+def trip_direction(trip_original_stops, direction_stops):
+    """
+    Guess the trip direction_id based on trip_original_stops, and
+    a direction_stops which should be a dictionary with 2 keys: "0" and "1" -
+    corresponding values should be sets of stops encountered in given dir
+    """
+    # Stops for each direction have to be unique
+    dir_stops_0 = direction_stops["0"].difference(direction_stops["1"])
+    dir_stops_1 = direction_stops["1"].difference(direction_stops["0"])
+
+    # Trip stops in direction 0 and direction 1
+    trip_stops_0 = trip_original_stops.intersection(dir_stops_0)
+    trip_stops_1 = trip_original_stops.intersection(dir_stops_1)
+
+    # Amount of stops of trip in each direction
+    trip_stops_0_len = len(trip_stops_0)
+    trip_stops_1_len = len(trip_stops_1)
+
+    # More or equal stops belonging to dir_0 then dir_1 => "0"
+    if trip_stops_0_len >= trip_stops_1_len:
+        return "0"
+
+    # More stops belonging to dir_1
+    elif trip_stops_0_len < trip_stops_1_len:
+        return "1"
+
+    # How did we get here
+    else:
+        raise RuntimeError(f"{trip_stops_0_len} is not bigger, equal or less then {trip_stops_1_len}")
 
 class Metro:
     @staticmethod
@@ -212,17 +248,48 @@ class Shaper:
             raise ValueError("Invalid transport type {} for Shaper".format(transport))
 
         if transport in {"train", "tram"}:
-            request = requests.get("https://mkuran.pl/feed/ztm/ztm-km-rail-shapes.osm")
+            request = requests.get("https://mkuran.pl/feed/ztm/ztm-km-rail-shapes.osm", stream=True)
 
         else:
-            # That's an overpass query for roads around Warsaw metro area
-            #request = requests.get(r"https://overpass-api.de/api/interpreter/?data=%5Bbbox%3A51.92%2C20.46%2C52.49%2C21.465%5D%5Bout%3Axml%5D%3B%0A(%0A%20way%5B%22highway%22%3D%22motorway%22%5D%3B%0A%20way%5B%22highway%22%3D%22motorway_link%22%5D%3B%0A%20way%5B%22highway%22%3D%22trunk%22%5D%3B%0A%20way%5B%22highway%22%3D%22trunk_link%22%5D%3B%0A%20way%5B%22highway%22%3D%22primary%22%5D%3B%0A%20way%5B%22highway%22%3D%22primary_link%22%5D%3B%0A%20way%5B%22highway%22%3D%22secondary%22%5D%3B%0A%20way%5B%22highway%22%3D%22secondary_link%22%5D%3B%0A%20way%5B%22highway%22%3D%22tertiary%22%5D%3B%0A%20way%5B%22highway%22%3D%22tertiary_link%22%5D%3B%0A%20way%5B%22highway%22%3D%22unclassified%22%5D%3B%0A%20way%5B%22highway%22%3D%22minor%22%5D%3B%0A%20way%5B%22highway%22%3D%22residential%22%5D%3B%0A%20way%5B%22highway%22%3D%22living_street%22%5D%3B%0A%20way%5B%22highway%22%3D%22service%22%5D%3B%0A)%3B%0A(._%3B%3E%3B)%3B%0Aout%3B")
+            # Overpass Query:
+            query = "\n".join([
+                "[bbox:51.9144,20.4438,52.5007,21.4844][out:xml];"
+                "("
+                ' way["highway"="motorway"];'
+                ' way["highway"="motorway_link"];'
+                ' way["highway"="trunk"];'
+                ' way["highway"="trunk_link"];'
+                ' way["highway"="primary"];'
+                ' way["highway"="primary_link"];'
+                ' way["highway"="secondary"];'
+                ' way["highway"="secondary_link"];'
+                ' way["highway"="tertiary"];'
+                ' way["highway"="tertiary_link"];'
+                ' way["highway"="unclassified"];'
+                ' way["highway"="minor"];'
+                ' way["highway"="residential"];'
+                ' way["highway"="living_street"];'
+                ' way["highway"="service"];'
+                ');'
+                'way._(poly:"52.4455 20.6858 52.376 20.6872 52.3533 20.7868 52.2929 20.726 52.2694 20.6724 52.2740 20.4465 52.2599 20.4438 52.2481 20.5832 52.2538 20.681 52.1865 20.6786 52.1859 20.7129 52.1465 20.7895 52.0966 20.783 52.0632 20.7222 52.0151 20.7617 51.9873 20.9351 51.9269 20.9509 51.9144 21.0226 51.9322 21.1987 51.9569 21.2472 52.0463 21.2368 52.1316 21.4844 52.1429 21.4404 52.2130 21.3814 52.2622 21.3141 52.2652 21.1977 52.3038 21.173 52.3063 21.2925 52.3659 21.3515 52.3829 21.3001 52.4221 21.1929 52.4898 21.1421");'
+                '>->.n;'
+                '<->.r;'
+                '(._;.n;.r;);'
+                'out;'
+            ])
 
-            # And this one also contains turn restrictions
-            request = requests.get(r"https://overpass-api.de/api/interpreter/?data=%5Bbbox%3A51.92%2C20.46%2C52.49%2C21.465%5D%5Bout%3Axml%5D%3B%0A(%0A%20way%5B%22highway%22%3D%22motorway%22%5D%3B%0A%20way%5B%22highway%22%3D%22motorway_link%22%5D%3B%0A%20way%5B%22highway%22%3D%22trunk%22%5D%3B%0A%20way%5B%22highway%22%3D%22trunk_link%22%5D%3B%0A%20way%5B%22highway%22%3D%22primary%22%5D%3B%0A%20way%5B%22highway%22%3D%22primary_link%22%5D%3B%0A%20way%5B%22highway%22%3D%22secondary%22%5D%3B%0A%20way%5B%22highway%22%3D%22secondary_link%22%5D%3B%0A%20way%5B%22highway%22%3D%22tertiary%22%5D%3B%0A%20way%5B%22highway%22%3D%22tertiary_link%22%5D%3B%0A%20way%5B%22highway%22%3D%22unclassified%22%5D%3B%0A%20way%5B%22highway%22%3D%22minor%22%5D%3B%0A%20way%5B%22highway%22%3D%22residential%22%5D%3B%0A%20way%5B%22highway%22%3D%22living_street%22%5D%3B%0A%20way%5B%22highway%22%3D%22service%22%5D%3B%0A)%3B%0A%3E-%3E.n%3B%0A%3C-%3E.r%3B%0A(._%3B.n%3B.r%3B)%3B%0Aout%3B%0A")
+            request = requests.get(
+                "https://overpass-api.de/api/interpreter/",
+                params={"data": query},
+                stream=True,
+            )
 
         temp_xml = NamedTemporaryFile(delete=False)
-        temp_xml.write(request.content)
+
+        for chunk in request.iter_content(chunk_size=1024):
+            temp_xml.write(chunk)
+
+        request.close()
         temp_xml.seek(0)
 
         router = pyroutelib3.Router(routing_type, temp_xml.name)
@@ -245,7 +312,7 @@ class Shaper:
             if route_type == "3": start = self.bus_router.findNode(start_lat, start_lon)
             elif route_type == "2": start = self.train_router.findNode(start_lat, start_lon)
             elif route_type == "0": start = self.tram_router.findNode(start_lat, start_lon)
-            else: raise ValuError("invalid type: {}".format(route_type))
+            else: raise ValueError("invalid type: {}".format(route_type))
 
         # End node
         if route_type == "3" and self.osm_stops.get(end_stop, None) in self.bus_router.rnodes:
