@@ -13,28 +13,86 @@ def no_html(text):
     if text == "None": return ""
     else: return re.sub("<.*?>", "", text)
 
-def alert_flags(alert_soup):
+def alert_flags(alert_soup, alert_type):
     "Get additional flags about the alert from icons, passed as BS4's soup"
+
     flags = set()
-    for icon in alert_soup.find_all("td", class_="ico"):
-        flags |= {i.get("title") for i in icon.find_all("img")}
+
+    # Selector is different depending on the alert type
+    if alert_type == 2:
+        icons = alert_soup.find_all("img", class_="impediment-category-icon")
+
+    else:
+        icons = alert_website_soup.find_all("img", class_="format-icon")
+
+    # Icons → Flags
+    for icon in icons:
+        flags.add(icon.get("alt"))
+
     return flags.intersection(ALERT_FLAGS)
 
-def alert_description(alert_soup):
-    "Get alert description from BS4's soup. Returns a (plain_text, html) for every alert soup"
-    # Remove unnecessary text
-    for tag in alert_soup.find_all("table"): tag.decompose()
-    for tag in alert_soup.find_all("h4"): tag.decompose()
-    for tag in alert_soup.find_all("div", id="PageInfo"): tag.decompose()
-    for tag in alert_soup.find_all("div", id="InneKomunikaty"): tag.decompose()
-    for tag in alert_soup.find_all("div", class_="InneKomunikatyLinia"): tag.decompose()
-    for tag in alert_soup.find_all("div", class_="cb"): tag.decompose()
+def alert_data(rss_item, alert_type):
+    data = {}
 
-    # Get what's left overr
+    data["id"] = f"A/{alert_type.upper()}/" + re.search(r"(?<=p=)\d+", rss_item.find("guid").text)[0]
+    data["title"] = no_html(rss_item.find("description").text)
+    data["link"] = no_html(rss_item.find("link").text)
+    data["body"] = rss_item.find("{http://purl.org/rss/1.0/modules/content/}encoded").text
+    data["htmlbody"] = data["body"]
+
+    # Effect
+    if alert_type == "impediment":
+        data["effect"] = 2
+
+    elif alert_type == "change":
+        data["effect"] = 7
+
+    else:
+        raise ValueError("unknown alert_type " + repr(alert_type))
+
+    # Parse affected routes
+    lines_raw = rss_item.find("title").text.upper()
+
+    if lines_raw.startswith("UTRUDNIENIA W KOMUNIKACJI: "):
+        lines_raw = lines_raw[26:]
+
+    elif lines_raw.startswith("ZMIANY W KOMUNIKACJI: "):
+        lines_raw = lines_raw[22:]
+
+    else:
+        lines_raw = ""
+
+    data["routes"] = re.findall(r"[0-9A-Za-z-]{1,3}", lines_raw)
+
+    return data
+
+def alert_description(alert_soup, alert_type):
+    "Get alert description from BS4's soup. Returns a (plain_text, html) for every alert soup"
+    # Different selector based on alert type
+    if alert_type == 2:
+        alert_soup = alert_soup.find("div", class_="impediment-content")
+
+    else:
+        alert_soup = alert_soup.find("div", class_="page-main")
+
+        for i in alert_soup.find_all("div.is-style-small"):
+            i.decompose()
+
+    # Get what's left over
     desc_with_tags = str(alert_soup)
 
+    # Remove everything after <hr>
+    desc_with_tags = re.sub(r"<hr\s?/?>(?!.*<hr\s?/?>).*", "", desc_with_tags, flags=re.DOTALL)
+
     # Clean text from HTML tags
-    clean_desc = no_html(desc_with_tags.replace("</p>", "\n").replace("<br/>", "\n").replace("<br>", "\n").replace("\xa0", " ").replace("  "," "))
+    clean_desc = no_html(
+        desc_with_tags              \
+            .replace("</p>", "\n")  \
+            .replace("<br/>", "\n") \
+            .replace("<br>", "\n")  \
+            .replace("\xa0", " ")   \
+            .replace("  "," ")      \
+    ).strip()
 
     return clean_desc, desc_with_tags
 

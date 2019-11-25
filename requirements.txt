@@ -4,8 +4,8 @@ libarchive
 
 # Realtime
 gtfs-realtime-bindings >= 0.0.5
-feedparser
 requests
+lxml
 
 # Shapes
 pyroutelib3 >= 1.3

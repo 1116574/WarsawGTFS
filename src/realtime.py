@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 from tempfile import TemporaryFile
 from bs4 import BeautifulSoup
 from urllib import request
+from lxml import etree
 from copy import copy
-import feedparser
 import requests
 import sqlite3
 import zipfile
@@ -24,13 +24,20 @@ from .utils import *
 class Realtime:
 
     @staticmethod
-    def alerts(gtfs_location="https://mkuran.pl/feed/ztm/ztm-latest.zip", out_proto=True, binary_proto=True, out_json=False):
+    def alerts(gtfs_location="https://mkuran.pl/gtfs/warsaw.zip", out_proto=True, binary_proto=True, out_json=False):
         "Get ZTM Warszawa Alerts"
         # Grab Entries
-        changes = feedparser.parse("http://www.ztm.waw.pl/rss.php?l=1&IDRss=3").entries
-        disruptions = feedparser.parse("http://www.ztm.waw.pl/rss.php?l=1&IDRss=6").entries
+        changes_req = requests.get("https://www.wtp.waw.pl/feed/?post_type=change")
+        impediments_req = requests.get("https://www.wtp.waw.pl/feed/?post_type=impediment")
         gtfs_routes = WarsawGtfs.routes_only(gtfs_location)
         idenum = 0
+
+        # Get Alerts into etrees
+        changes_req.encoding = "utf-8"
+        changes = etree.fromstring(changes_req.content)
+
+        impediments_req.encoding = "utf-8"
+        impediments = etree.fromstring(impediments_req.content)
 
         # Containers
         if out_proto:
@@ -45,79 +52,85 @@ class Realtime:
 
         # Sort Entries
         all_entries = []
-        for i in disruptions:
-            i.effect = 2 # Reduced Service
-            all_entries.append(i)
+        for i in impediments.findall("channel/item"):
+            data = alert_data(i, alert_type="impediment")
+            data["effect"] = 2 # Reduced Service
 
-        for i in changes:
-            i.effect = 7 # Other Effect
-            all_entries.append(i)
+            all_entries.append(data)
+
+        for i in changes.findall("channel/item"):
+            data = alert_data(i, alert_type="change")
+            data["effect"] = 7 # Other Effect
+
+            all_entries.append(data)
 
         # Alerts
         for entry in all_entries:
-            # Gather data
-            link = no_html(str(entry.link))
-            title = no_html(str(entry.description))
+            # Additional info from website provided by RSS
+            alert_website = requests.get(entry["link"])
+            alert_website.raise_for_status()
+            alert_website.encoding = "utf-8"
 
-            # Alert ID is hidden in the alert link
-            alert_id = "A/" + re.search(r"(?<=&i=)\d+", link)[0]
+            soup = BeautifulSoup(alert_website.text, "html.parser")
 
-            try: lines_raw = re.findall(r"[A-Za-z0-9-]{1,3}", entry.title.split(":")[1])
-            except IndexError: lines_raw = ""
-
-            lines = [i for i in lines_raw  if \
+            # Get routes for this alert
+            entry["routes"] = [i for i in entry["routes"] if \
                 i in gtfs_routes["0"] or \
                 i in gtfs_routes["1"] or \
                 i in gtfs_routes["2"] or \
                 i in gtfs_routes["3"]
             ]
 
-
-            #try:
-            # Additional info from website provided by RSS
-            alert_website = requests.get(link)
-            alert_website.raise_for_status()
-            alert_website.encoding = "utf-8"
-
-            soup = BeautifulSoup(alert_website.text, "html.parser")
-            descsoup = soup.find("div", id="PageContent")
-
             # Add routes if those are not specified
-            if not lines:
-                flags = alert_flags(descsoup)
+            if not entry["routes"]:
+                flags = alert_flags(soup, entry["effect"])
 
-                if "metro" in flags: lines.extend(gtfs_routes["1"])
-                elif "tramwaje" in flags: lines.extend(gtfs_routes["0"])
-                elif flags.intersection("kolej", "skm"): lines.extend(gtfs_routes["2"])
-                elif "autobusy" in flags: lines.extend(gtfs_routes["3"])
+                if "metro" in flags: entry["routes"].extend(gtfs_routes["1"])
+                elif "tramwaje" in flags: entry["routes"].extend(gtfs_routes["0"])
+                elif flags.intersection("kolej", "skm"): entry["routes"].extend(gtfs_routes["2"])
+                elif "autobusy" in flags: entry["routes"].extend(gtfs_routes["3"])
 
-            desc, desc_html = alert_description(descsoup)
+            desc, desc_html = alert_description(soup, entry["effect"])
 
-            #except:
-            #    desc, desc_html = "", ""
+            if desc and desc_html:
+                entry["body"] = desc
+                entry["htmlbody"] = desc_html
 
-            if lines:
+            if entry["routes"]:
 
                 # Append to gtfs_rt container
                 if out_proto:
                     entity = container.entity.add()
-                    entity.id = alert_id
+                    entity.id = entry["id"]
+
                     alert = entity.alert
-                    alert.effect = entry.effect
-                    alert.url.translation.add().text = link
-                    alert.header_text.translation.add().text = title
-                    if desc: alert.description_text.translation.add().text = desc
-                    for line in sorted(lines):
+                    alert.effect = entry["effect"]
+                    alert.url.translation.add().text = entry["link"]
+                    alert.header_text.translation.add().text = entry["title"]
+
+                    if desc:
+                        alert.description_text.translation.add().text = entry["body"]
+
+                    for route in entry["routes"]:
                         selector = alert.informed_entity.add()
-                        selector.route_id = line
+                        selector.route_id = route
 
                 # Append to JSON container
                 if out_json:
-                    json_container["alerts"].append(OrderedDict([
-                        ("id", alert_id), ("routes", sorted(lines)),
-                        ("effect", "REDUCED_SERVICE" if entry.effect == 2 else "OTHER_EFFECT"),
-                        ("link", link), ("title", title), ("body", desc), ("htmlbody", desc_html)
-                    ]))
+                    json_entry = OrderedDict()
+                    json_entry["id"] = entry["id"]
+                    json_entry["routes"] = entry["routes"]
+
+                    json_entry["effect"] = \
+                        "REDUCED_SERVICE" if entry["effect"] == 2 \
+                        else "OTHER_EFFECT"
+
+                    json_entry["link"] = entry["link"]
+                    json_entry["title"] = entry["title"]
+                    json_entry["body"] = entry["body"]
+                    json_entry["htmlbody"] = entry["htmlbody"]
+
+                    json_container["alerts"].append(json_entry)
 
         # Export
         if out_proto and binary_proto:
@@ -130,7 +143,7 @@ class Realtime:
             with open("gtfs-rt/alerts.json", "w", encoding="utf8") as f: json.dump(json_container, f, indent=2, ensure_ascii=False)
 
     @staticmethod
-    def brigades(apikey, gtfs_location="https://mkuran.pl/feed/ztm/ztm-latest.zip", export=False):
+    def brigades(apikey, gtfs_location="https://mkuran.pl/gtfs/warsaw.zip", export=False):
         "Create a brigades table to match positions to gtfs"
         # Variables
         brigades = {}
@@ -273,7 +286,7 @@ class Realtime:
         return brigades
 
     @staticmethod
-    def positions(apikey, brigades="https://mkuran.pl/feed/ztm/ztm-brigades.json", previous={}, out_proto=True, binary_proto=True, out_json=False):
+    def positions(apikey, brigades="https://mkuran.pl/gtfs/warsaw/brigades.json", previous={}, out_proto=True, binary_proto=True, out_json=False):
         "Get ZTM Warszawa positions"
         # Variables
         positions = OrderedDict()
