@@ -75,7 +75,7 @@ def alert_description(alert_soup, alert_type):
     else:
         alert_soup = alert_soup.find("div", class_="page-main")
 
-        for i in alert_soup.find_all("div.is-style-small"):
+        for i in alert_soup.find_all("div", class_="is-style-small"):
             i.decompose()
 
     # Get what's left over
