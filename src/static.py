@@ -311,7 +311,7 @@ class Converter:
         for group in self.parser.parse_zp():
             # Fix town name for Kampinoski PN
             if group["town"] == "Kampinoski Pn":
-                group["town"]  = "Kampinoski PN"
+                group["town"] = "Kampinoski PN"
 
             # Add name to self.stop_names if it's missing
             if group["id"] not in self.stop_names:
@@ -319,7 +319,7 @@ class Converter:
                 self.stop_names[group["id"]] = group["name"]
 
             else:
-                group["name"]  = self.stop_names[group["id"]]
+                group["name"] = self.stop_names[group["id"]]
 
             # Add town name to stop name
             if should_town_be_added_to_name(group):

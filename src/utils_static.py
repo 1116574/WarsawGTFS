@@ -54,7 +54,7 @@ def normal_time(time, lessthen24=False):
     return f"{h:0>2}:{m:0>2}:00"
 
 def should_town_be_added_to_name(group):
-    group_name = group["name"].upper(),
+    group_name = group["name"].upper()
     group_town = group["town"].upper()
     group_code = group["town_code"].upper()
 
