@@ -23,7 +23,7 @@ def alert_flags(alert_soup, alert_type):
         icons = alert_soup.find_all("img", class_="impediment-category-icon")
 
     else:
-        icons = alert_website_soup.find_all("img", class_="format-icon")
+        icons = alert_soup.find_all("img", class_="format-icon")
 
     # Icons → Flags
     for icon in icons:
