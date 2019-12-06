@@ -73,7 +73,7 @@ def alert_description(alert_soup, alert_type):
         alert_soup = alert_soup.find("div", class_="impediment-content")
 
     else:
-        alert_soup = alert_soup.find("div", class_="page-main")
+        alert_soup = alert_soup.find("main", class_="page-main")
 
         if not alert_soup:
             return "", ""

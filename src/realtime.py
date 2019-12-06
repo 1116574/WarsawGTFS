@@ -96,6 +96,11 @@ class Realtime:
                 entry["body"] = desc
                 entry["htmlbody"] = desc_html
 
+            else:
+                # print(f'Unable to scrap page {entry["link"]}')
+                entry["body"] = ""
+                entry["htmlbody"] = ""
+
             if entry["routes"]:
 
                 # Append to gtfs_rt container
