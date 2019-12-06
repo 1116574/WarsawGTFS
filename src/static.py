@@ -538,7 +538,7 @@ class Converter:
         "Create files that don't depend of ZTM file content"
         file = open("gtfs/agency.txt", mode="w", encoding="utf8", newline="\r\n")
         file.write('agency_id,agency_name,agency_url,agency_timezone,agency_lang,agency_phone,agency_fare_url\n')
-        file.write('0,"Warszawski Transport Publiczny","https://wtp.waw.pl",Europe/Warsaw,pl,19 115,"https://www.nowa.wtp.waw.pl/ceny-i-rodzaje-biletow/"\n')
+        file.write('0,"Warszawski Transport Publiczny","https://www.wtp.waw.pl",Europe/Warsaw,pl,19 115,"https://www.wtp.waw.pl/ceny-i-rodzaje-biletow/"\n')
         file.close()
 
         file = open("gtfs/feed_info.txt", mode="w", encoding="utf8", newline="\r\n")
