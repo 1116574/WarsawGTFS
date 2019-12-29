@@ -186,6 +186,7 @@ class Converter:
             writer.writerow([
                 group_id, group_name, station_lat, station_lon,
                 "", "", station_info.get("ibnr_code", ""),
+                station_info.get("pkpplk_code", ""),
                 "", station_info.get("wheelchair", 0),
             ])
 
@@ -194,7 +195,8 @@ class Converter:
             # Hub entry
             writer.writerow([
                 group_id, group_name, station_lat, station_lon,
-                "1", "", station_info["ibnr_code"],
+                "1", "", station_info.get("ibnr_code", ""),
+                station_info.get("pkpplk_code", ""),
                 "", station_info.get("wheelchair", 0),
             ])
 
@@ -211,7 +213,8 @@ class Converter:
                 # Output to GTFS
                 writer.writerow([
                     platform_id, platform_name, platform_lat, platform_lon,
-                    "0", group_id, station_info["ibnr_code"],
+                    "0", group_id, station_info.get("ibnr_code", ""),
+                    station_info.get("pkpplk_code", ""),
                     platform_code, station_info.get("wheelchair", 0),
                 ])
 
@@ -260,7 +263,7 @@ class Converter:
                 writer.writerow([
                     stake["id"], f'{group_name} {stake["code"]}',
                     stake["lat"], stake["lon"],
-                    "", "", "", "", stake["wheelchair"],
+                    "", "", "", "", "", stake["wheelchair"],
                 ])
 
             # Position undefined
@@ -304,7 +307,12 @@ class Converter:
     def stops(self):
         file = open("gtfs/stops.txt", mode="w", encoding="utf8", newline="")
         writer = csv.writer(file)
-        writer.writerow(["stop_id", "stop_name", "stop_lat", "stop_lon", "location_type", "parent_station", "stop_IBNR", "platform_code", "wheelchair_boarding"])
+
+        writer.writerow([
+            "stop_id", "stop_name", "stop_lat", "stop_lon",
+            "location_type", "parent_station", "stop_IBNR",
+            "stop_PKPPLK", "platform_code", "wheelchair_boarding"
+        ])
 
         print("\033[1A\033[K" + "Parsing stops (ZP)")
 
