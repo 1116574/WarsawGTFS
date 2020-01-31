@@ -541,8 +541,6 @@ class Converter:
 
     @staticmethod
     def static_files(shapes, version, download_time):
-        feed_version = "Version {}; downloaded at: {}".format(version, download_time)
-
         "Create files that don't depend of ZTM file content"
         file = open("gtfs/agency.txt", mode="w", encoding="utf8", newline="\r\n")
         file.write('agency_id,agency_name,agency_url,agency_timezone,agency_lang,agency_phone,agency_fare_url\n')
@@ -551,8 +549,17 @@ class Converter:
 
         file = open("gtfs/feed_info.txt", mode="w", encoding="utf8", newline="\r\n")
         file.write('feed_publisher_name,feed_publisher_url,feed_lang,feed_version\n')
-        if shapes: file.write('"GTFS Convert: MKuranowski; Data: ZTM Warszawa; Bus Shapes (under ODbL License): © OpenStreetMap contributors","https://github.com/MKuranowski/WarsawGTFS",pl,{}\n'.format(feed_version))
-        else: file.write('"GTFS Convert: MKuranowski; Data: ZTM Warszawa","https://github.com/MKuranowski/WarsawGTFS",pl,{}\n'.format(feed_version))
+        file.write(f'"WarsawGTFS (provided by Mikołaj Kuranowski)","https://github.com/MKuranowski/WarsawGTFS",pl,{version}\n')
+        file.close()
+
+        file = open("gtfs/attributions.txt", mode="w", encoding="utf8", newline="\r\n")
+        file.write('attribution_id,organization_name,is_producer,is_operator,is_authority,is_data_source,attribution_url\n')
+        file.write('"WarsawGTFS (provided by Mikołaj Kuranowski)",pl,1,0,0,0,"https://github.com/MKuranowski/WarsawGTFS"\n')
+        file.write(f'"ZTM Warszawa (retrieved {download_time})",pl,0,0,1,1,"https://ztm.waw.pl"\n')
+        
+        if shapes:
+            file.write('"Bus shapes (under ODbL licnese): © OpenStreetMap contributors",pl,0,0,1,1,"https://www.openstreetmap.org/copyright"\n')
+        
         file.close()
 
     @staticmethod

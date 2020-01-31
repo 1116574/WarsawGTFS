@@ -8,9 +8,9 @@ import io
 import os
 import re
 
-from .utils_static import *
-from .static import *
-from .utils import *
+from .utils_static import Metro, Shaper
+from .static import Converter
+from .utils import clear_directory, haversine
 
 FILES_TO_COPY = {
     "calendar_dates.txt": ["date", "service_id", "exception_type"],
@@ -331,7 +331,14 @@ class MultiDay:
     def create_stops(self):
         # Open file
         file = open("gtfs/stops.txt", mode="w", encoding="utf8", newline="")
-        writer = csv.DictWriter(file, ["stop_id", "stop_name", "stop_lat", "stop_lon", "location_type", "parent_station", "stop_IBNR", "platform_code", "wheelchair_boarding"], extrasaction="ignore")
+        
+        writer = csv.DictWriter(
+            file,
+            ["stop_id", "stop_name", "stop_lat", "stop_lon", "location_type", "parent_station",
+            "stop_IBNR", "stop_PKPPLK", "platform_code", "wheelchair_boarding"],
+            extrasaction="ignore"
+        )
+        
         writer.writeheader()
 
         # Export stops to GTFS
