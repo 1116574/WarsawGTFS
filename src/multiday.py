@@ -48,8 +48,6 @@ class MultiDay:
         for index, (file_name, file_attr) in enumerate(server_files):
             file_start = datetime.strptime(file_name, "RA%y%m%d.7z").date()
 
-            # We don't need anything for previous dates
-            if file_start < today: continue
 
             # Get last day when file is active (next file - 1 day)
             try:
@@ -58,6 +56,9 @@ class MultiDay:
             except IndexError:
                 file_end = date.max
 
+            # We don't need anything for previous dates
+            if file_end < today: continue
+            
             # Get file modification time (to recreate GTFS if a newer version was uploaded)
             file_mod = datetime.strptime(file_attr["modify"], "%Y%m%d%H%M%S")
 
