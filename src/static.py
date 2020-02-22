@@ -28,6 +28,7 @@ PROPER_STOP_NAMES = {
     "2005": "Praga-Płd. - Ratusz",           "1541": "Marki Bandurskiego I",
     "5001": "Połczyńska - Parking P+R",      "2296": "Szosa Lubelska",
     "6201": "Lipków Paschalisa-Jakubowicza", "1226": "Mańki-Wojody",
+    "2324": "Wiązowna",
 }
 
 class Converter:
@@ -556,10 +557,10 @@ class Converter:
         file.write('attribution_id,organization_name,is_producer,is_operator,is_authority,is_data_source,attribution_url\n')
         file.write('"WarsawGTFS (provided by Mikołaj Kuranowski)",pl,1,0,0,0,"https://github.com/MKuranowski/WarsawGTFS"\n')
         file.write(f'"ZTM Warszawa (retrieved {download_time})",pl,0,0,1,1,"https://ztm.waw.pl"\n')
-        
+
         if shapes:
             file.write('"Bus shapes (under ODbL licnese): © OpenStreetMap contributors",pl,0,0,1,1,"https://www.openstreetmap.org/copyright"\n')
-        
+
         file.close()
 
     @staticmethod
