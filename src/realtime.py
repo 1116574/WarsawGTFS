@@ -155,10 +155,7 @@ class Realtime:
 
         trip_last_points = {}
         api_responses = {}
-        parsed_stops = set()
         matched_trips = set()
-
-        today = datetime.today().strftime("%Y%m%d")
 
         # Download GTFS
         print("Retreaving GTFS")
@@ -219,8 +216,8 @@ class Realtime:
                             print("\033[1A\033[K" + "Making new API call: R:", route_id, "S:", stop_id)
                             api_response = requests.get(
                                 "https://api.um.warszawa.pl/api/action/dbtimetable_get/",
-                                timeout = 5,
-                                params = {
+                                timeout=5,
+                                params={
                                     "id": "e923fa0e-d96c-43f9-ae6e-60518c9f3238",
                                     "apikey": apikey,
                                     "busstopId": stop_id[:4],
@@ -235,13 +232,31 @@ class Realtime:
                             assert type(api_response["result"]) is list
                             result = parse_apium_response(api_response)
 
-                        except (json.decoder.JSONDecodeError,
-                                requests.exceptions.HTTPError,
-                                requests.exceptions.ConnectTimeout,
-                                requests.exceptions.ReadTimeout,
-                                AssertionError
-                        ):
-                            print("\033[1A\033[K\033[1m" + "Incorrent API response for R: {} S: {}\033[0m".format(route_id, stop_id), end="\n\n")
+                        except requests.exceptions.Timeout:
+                            print(
+                                "\033[1A\033[K\033[1m"
+                                f"Incorrent API response for R: {route_id} S: {stop_id} "
+                                "| TIMEOUT\033[0m",
+                                end="\n\n"
+                            )
+                            continue
+
+                        except requests.exceptions.HTTPError:
+                            print(
+                                "\033[1A\033[K\033[1m"
+                                f"Incorrent API response for R: {route_id} S: {stop_id} "
+                                f"| {api_response.status_code}\033[0m",
+                                end="\n\n"
+                            )
+                            continue
+
+                        except (json.decoder.JSONDecodeError, AssertionError):
+                            print(
+                                "\033[1A\033[K\033[1m"
+                                f"Incorrent API response for R: {route_id} S: {stop_id}:\033[0m\n"
+                                f"{api_response.text!r}",
+                                end="\n\n"
+                            )
                             continue
 
                         api_responses[(route_id, stop_id)] = result
@@ -413,10 +428,12 @@ class Realtime:
 
         # Export results
         if out_proto and binary_proto:
-            with open("gtfs-rt/vehicles.pb", "wb") as f: f.write(container.SerializeToString())
+            with open("gtfs-rt/vehicles.pb", "wb") as f:
+                f.write(container.SerializeToString())
 
         elif out_proto:
-            with open("gtfs-rt/vehicles.pb", "w") as f: f.write(str(container))
+            with open("gtfs-rt/vehicles.pb", "w") as f:
+                f.write(str(container))
 
         if out_json:
             for i in map(copy, positions.values()):

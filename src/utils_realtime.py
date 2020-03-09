@@ -10,8 +10,10 @@ ALERT_FLAGS = {"autobusy", "tramwaje", "skm", "kolej", "metro"}
 
 def no_html(text):
     "Clean text from html tags"
-    if text == "None": return ""
-    else: return re.sub("<.*?>", "", text)
+    if text == "None":
+        return ""
+    else:
+        return re.sub("<.*?>", "", text)
 
 def alert_flags(alert_soup, alert_type):
     "Get additional flags about the alert from icons, passed as BS4's soup"
@@ -32,9 +34,10 @@ def alert_flags(alert_soup, alert_type):
     return flags.intersection(ALERT_FLAGS)
 
 def alert_data(rss_item, alert_type):
-    data = {}
+    alert_web_id = re.search(r"(?<=p=)\d+", rss_item.find("guid").text)[0]
 
-    data["id"] = f"A/{alert_type.upper()}/" + re.search(r"(?<=p=)\d+", rss_item.find("guid").text)[0]
+    data = {}
+    data["id"] = f"A/{alert_type.upper()}/{alert_web_id}"
     data["title"] = no_html(rss_item.find("description").text)
     data["link"] = no_html(rss_item.find("link").text)
     data["body"] = rss_item.find("{http://purl.org/rss/1.0/modules/content/}encoded").text
@@ -94,7 +97,7 @@ def alert_description(alert_soup, alert_type):
             .replace("<br/>", "\n") \
             .replace("<br>", "\n")  \
             .replace("\xa0", " ")   \
-            .replace("  "," ")      \
+            .replace("  ", " ")     \
     ).strip()
 
     return clean_desc, desc_with_tags
@@ -102,11 +105,14 @@ def alert_description(alert_soup, alert_type):
 def timepoint_in_trips(timepoint, route, stop, times):
     "Try find trip_id in times for given timepoint, route and stop"
     valid_times = [i for i in times if i["routeId"] == route and i["stopId"] == stop]
-    valid_trips = [i for i in times if i["timepoint"] == timepoint]
+    valid_trips = [i for i in valid_times if i["timepoint"] == timepoint]
 
     # If not found, try to add 24h to timepoint, to catch after-midnight trips
     if not valid_trips:
-        next_timepoint = ":".join([str(int(timepoint.split(":")[0]) + 24), timepoint.split(":")[1], timepoint.split(":")[2]])
+        next_timepoint = ":".join([str(int(timepoint.split(":")[0]) + 24),
+                                   timepoint.split(":")[1],
+                                   timepoint.split(":")[2]])
+
         valid_trips = [i for i in times if i["timepoint"] == next_timepoint]
 
     if valid_trips:
@@ -121,8 +127,8 @@ def later_in_time(t1, t2):
     if t2[0] >= 24 and t1[0] <= 3:
         t1[0] += 24
 
-    t1 = 3600*t1[0] + 60*t1[1] + t1[2]
-    t2 = 3600*t2[0] + 60*t2[1] + t2[2]
+    t1 = 3600 * t1[0] + 60 * t1[1] + t1[2]
+    t2 = 3600 * t2[0] + 60 * t2[1] + t2[2]
 
     return t2 > t1
 
@@ -154,8 +160,8 @@ def parse_apium_response(api_response):
 def load_api_positions(apikey, request_type):
     api_response = requests.get(
         "https://api.um.warszawa.pl/api/action/busestrams_get/",
-        timeout = 5,
-        params = {
+        timeout=5,
+        params={
             "resource_id": "f2e5503e-927d-4ad3-9500-4ab9e55deb59",
             "apikey": apikey,
             "type": request_type,
