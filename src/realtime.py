@@ -214,7 +214,7 @@ class Realtime:
 
                         try:
                             print("\033[1A\033[K" + "Making new API call: R:", route_id, "S:", stop_id)
-                            api_response = requests.get(
+                            api_request = requests.get(
                                 "https://api.um.warszawa.pl/api/action/dbtimetable_get/",
                                 timeout=5,
                                 params={
@@ -224,11 +224,11 @@ class Realtime:
                                     "busstopNr": stop_id[4:6],
                                     "line": route_id
                             })
-                            api_response.raise_for_status()
+                            api_request.raise_for_status()
 
                             print("\033[1A\033[K" + "Reading recived API response for: R:", route_id, "S:", stop_id)
 
-                            api_response = api_response.json()
+                            api_response = api_request.json()
                             assert type(api_response["result"]) is list
                             result = parse_apium_response(api_response)
 
@@ -245,7 +245,7 @@ class Realtime:
                             print(
                                 "\033[1A\033[K\033[1m"
                                 f"Incorrent API response for R: {route_id} S: {stop_id} "
-                                f"| {api_response.status_code}\033[0m",
+                                f"| {api_request.status_code}\033[0m",
                                 end="\n\n"
                             )
                             continue
@@ -254,7 +254,7 @@ class Realtime:
                             print(
                                 "\033[1A\033[K\033[1m"
                                 f"Incorrent API response for R: {route_id} S: {stop_id}:\033[0m\n"
-                                f"{api_response.text!r}",
+                                f"{api_request.text!r}",
                                 end="\n\n"
                             )
                             continue
