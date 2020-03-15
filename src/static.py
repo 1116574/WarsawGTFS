@@ -555,8 +555,8 @@ class Converter:
 
         file = open("gtfs/attributions.txt", mode="w", encoding="utf8", newline="\r\n")
         file.write('attribution_id,organization_name,is_producer,is_operator,is_authority,is_data_source,attribution_url\n')
-        file.write('"WarsawGTFS (provided by Mikołaj Kuranowski)",pl,1,0,0,0,"https://github.com/MKuranowski/WarsawGTFS"\n')
-        file.write(f'"ZTM Warszawa (retrieved {download_time})",pl,0,0,1,1,"https://ztm.waw.pl"\n')
+        file.write('0,"WarsawGTFS (provided by Mikołaj Kuranowski)",pl,1,0,0,0,"https://github.com/MKuranowski/WarsawGTFS"\n')
+        file.write(f'1,"ZTM Warszawa (retrieved {download_time})",pl,0,0,1,1,"https://ztm.waw.pl"\n')
 
         if shapes:
             file.write('"Bus shapes (under ODbL licnese): © OpenStreetMap contributors",pl,0,0,1,1,"https://www.openstreetmap.org/copyright"\n')
