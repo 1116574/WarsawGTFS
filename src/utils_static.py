@@ -107,13 +107,17 @@ def trip_direction(trip_original_stops, direction_stops):
         raise RuntimeError(f"{trip_stops_0_len} is not bigger, equal or less then {trip_stops_1_len}")
 
 class Metro:
+    def __init__(self):
+        self.valid_calendars = set()
+        self.valid_shapes = set()
+        self.valid_trips = set()
+
     @staticmethod
-    def _FieldNames(f):
+    def _fieldnames(f):
         r = csv.DictReader(f)
         return r.fieldnames
 
-    @classmethod
-    def _RewriteCalendar(self, filename, metro_file):
+    def rewrite_calendar(self, filename, metro_file):
         gtfs_fileloc = os.path.join("gtfs", filename)
         dates_ztm = set()
         dates_metro = set()
@@ -123,10 +127,12 @@ class Metro:
         # Load ZTM Calendars
         with open(gtfs_fileloc, "r", encoding="utf-8", newline="") as f:
             gtfs_reader = csv.DictReader(f)
-            gtfs_fieldnames = gtfs_reader.fieldnames
             for row in gtfs_reader:
                 dates_ztm.add(datetime.strptime(row["date"], "%Y%m%d").date())
-                if row["date"] not in calendars: calendars[row["date"]] = []
+
+                if row["date"] not in calendars:
+                    calendars[row["date"]] = []
+
                 calendars[row["date"]].append(row["service_id"])
 
         # Load Metro Calendars
@@ -134,7 +140,10 @@ class Metro:
         metro_reader = csv.DictReader(metro_buffer)
         for row in metro_reader:
             dates_metro.add(datetime.strptime(row["date"], "%Y%m%d").date())
-            if row["date"] not in calendars: calendars[row["date"]] = []
+
+            if row["date"] not in calendars:
+                calendars[row["date"]] = []
+
             calendars[row["date"]].append(row["service_id"])
 
         # Find date range
@@ -147,18 +156,25 @@ class Metro:
             writer.writeheader()
             while start_date <= end_date:
                 date_str = start_date.strftime("%Y%m%d")
+
                 for service in calendars[date_str]:
-                    writer.writerow({"date": date_str, "service_id": service, "exception_type": "1"})
+                    writer.writerow({
+                        "date": date_str,
+                        "service_id": service,
+                        "exception_type": "1"
+                    })
+
+                    self.valid_calendars.add(service)
+
                 start_date += timedelta(1)
 
-    @classmethod
-    def _RewriteFile(self, filename, metro_file):
+    def rewrite_file(self, filename, metro_file):
         gtfs_fileloc = os.path.join("gtfs", filename)
 
         if os.path.exists(gtfs_fileloc):
             # Get gtfs file header
             with open(gtfs_fileloc, "r", encoding="utf-8", newline="") as f:
-                gtfs_fieldnames = self._FieldNames(f)
+                gtfs_fieldnames = self._fieldnames(f)
 
             # Decode metrofile
             metro_buffer = io.TextIOWrapper(metro_file, encoding="utf-8", newline="")
@@ -168,28 +184,67 @@ class Metro:
             with open(gtfs_fileloc, "a", encoding="utf-8", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=gtfs_fieldnames, extrasaction="ignore")
                 for row in metro_reader:
-                    if filename == "trips.txt" and not row.get("exceptional", ""): row["exceptional"] = "0"
-                    if filename == "routes.txt": row["agency_id"] = "0"
+                    # Data Check
+                    if filename == "trips.txt":
+                        if row["service_id"] not in self.valid_calendars:
+                            continue
+                        else:
+                            self.valid_trips.add(row["trip_id"])
+                            self.valid_shapes.add(row["shape_id"])
+
+                    elif filename == "stop_times.txt" and row["trip_id"] not in self.valid_trips:
+                        continue
+
+                    elif filename == "shapes.txt" and row["shape_id"] not in self.valid_shapes:
+                        continue
+
+                    if filename == "trips.txt" and not row.get("exceptional", ""):
+                        row["exceptional"] = "0"
+
+                    if filename == "routes.txt":
+                        row["agency_id"] = "0"
+
                     writer.writerow(row)
 
         else:
-            # If file does not exist then simply copy it, without caring about the content
-            with open(gtfs_fileloc, "a", encoding="utf-8", newline="\r\n") as f:
-                for row in metro_file:
-                    row = str(row, "utf-8")
-                    f.write(row.rstrip() + "\n")
+            # If file does not exist then simply copy it
+            with open(gtfs_fileloc, "w", encoding="utf-8", newline="") as f:
+                # Decode metrofile
+                metro_buffer = io.TextIOWrapper(metro_file, encoding="utf-8", newline="")
+                metro_reader = csv.DictReader(metro_buffer)
+
+                writer = csv.DictWriter(f, fieldnames=metro_reader.fieldnames,
+                                        extrasaction="ignore")
+                writer.writeheader()
+
+                for row in metro_reader:
+                    if filename == "frequencies.txt" and row["trip_id"] not in self.valid_trips:
+                        continue
+
+                    elif filename == "shapes.txt" and row["shape_id"] not in self.valid_shapes:
+                        continue
+
+                    writer.writerow(row)
 
     @classmethod
-    def add(self):
-        feed = requests.get("https://mkuran.pl/feed/metro/metro-latest.zip")
+    def add(cls):
+        self = cls()
+
+        feed = requests.get("https://mkuran.pl/gtfs/warsaw/metro.zip")
+
         buffer = io.BytesIO(feed.content)
         archive = zipfile.ZipFile(buffer)
-        files = ["routes.txt", "stops.txt", "trips.txt", "stop_times.txt", \
-                 "calendar_dates.txt", "frequencies.txt", "shapes.txt"]
+
+        files = ["routes.txt", "stops.txt", "calendar_dates.txt", "trips.txt", "stop_times.txt",
+                 "frequencies.txt", "shapes.txt"]
+
         for filename in files:
             with archive.open(filename) as metrofile:
-                if filename == "calendar_dates.txt": self._RewriteCalendar(filename, metrofile)
-                else: self._RewriteFile(filename, metrofile)
+                if filename == "calendar_dates.txt":
+                    self.rewrite_calendar(filename, metrofile)
+                else:
+                    self.rewrite_file(filename, metrofile)
+
         archive.close()
 
 class Shaper:
