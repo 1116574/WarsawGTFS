@@ -717,8 +717,8 @@ class Converter:
                    '1,"https://ztm.waw.pl"\n')
 
         if shapes:
-            buff.write('2,"Bus shapes (under ODbL licnese): © OpenStreetMap contributors",pl,0,0,1,'
-                       '1,"https://www.openstreetmap.org/copyright"\n')
+            buff.write('2,"Bus shapes (under ODbL licnese): © OpenStreetMap contributors",pl,'
+                       '0,0,1,1,"https://www.openstreetmap.org/copyright"\n')
 
         buff.close()
 
@@ -754,7 +754,8 @@ class Converter:
         finally:
 
             self.close_files()
-            self.shapes.close()
+            if shapes:
+                self.shapes.close()
 
         print("\033[1A\033[K" + "Parser finished working, closing TXT file")
         self.reader.close()
