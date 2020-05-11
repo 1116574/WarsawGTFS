@@ -346,7 +346,7 @@ class Realtime:
             json_container["positions"] = []
 
         # Get brigades, if brigades is not already a dict or OrderedDict
-        if type(brigades) is str:
+        if isinstance(brigades, str):
             if brigades.startswith("ftp://") or brigades.startswith("http://") \
                     or brigades.startswith("https://"):
                 brigades_request = requests.get(brigades)
@@ -356,7 +356,7 @@ class Realtime:
                     brigades = json.load(f)
 
         # Sort times in brigades, if they're not sorted
-        if type(brigades) is not OrderedDict:
+        if not isinstance(brigades, OrderedDict):
             for route in brigades:
                 for brigade in brigades[route]:
                     brigades[route][brigade] = sorted(

@@ -234,7 +234,7 @@ class WarsawGtfs:
                 self.stops[row["stop_id"]] = [row["stop_lat"], row["stop_lon"]]
 
     def list_trips(self):
-        with self.arch.open("stops.txt", mode="r") as buffer:
+        with self.arch.open("trips.txt", mode="r") as buffer:
             for row in csv.DictReader(io.TextIOWrapper(buffer, encoding="utf8", newline="")):
                 self.trips[row["trip_id"]] = (row["route_id"], row["service_id"])
 
