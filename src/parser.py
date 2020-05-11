@@ -1,6 +1,8 @@
+from warnings import warn
+from typing import Generator
+from datetime import date
 import re
 
-from warnings import warn
 from .utils_static import normal_time
 
 """
@@ -32,20 +34,17 @@ class Parser:
         self.reader = reader
 
     def __del__(self):
-        try:
-            self.reader.close()
-        except:
-            pass
+        self.reader.close()
 
     def close(self):
         self.reader.close()
 
-    def parse_ka(self):
+    def parse_ka(self) -> Generator[dict, None, None]:
         """
         Skips to section KA and parses data from there.
         A generator which yields for every day a:
         {
-            "date": "YYYYMMDD",
+            "date": datetime.date,
             "services": ["service_id", ...],
         }
         """
@@ -66,8 +65,14 @@ class Parser:
                 continue
 
             # data conversion
+            row_date = date(
+                year=int(line_match[1]),
+                month=int(line_match[2]),
+                day=int(line_match[3])
+            )
+
             day_data = {
-                "date": line_match[1] + line_match[2] + line_match[3],
+                "date": row_date,
                 "services": line_match[4].split(),
             }
 
@@ -75,7 +80,7 @@ class Parser:
 
         raise EOFError("End of section KA not reched before EOF!")
 
-    def parse_zp(self):
+    def parse_zp(self) -> Generator[dict, None, None]:
         """
         Skips to section ZP and parses data from there.
         A generator which yields for every stop group a:
@@ -113,7 +118,7 @@ class Parser:
 
         raise EOFError("End of ZP section was not reached before EOF!")
 
-    def parse_pr(self):
+    def parse_pr(self) -> Generator[dict, None, None]:
         """
         Skips to next PR section and parses data from there.
         A generator which yields for every stop inside group a:
@@ -135,7 +140,10 @@ class Parser:
                 return
 
             # regex for matching data of a stake inside a group
-            line_match = re.match(r"(\d{4})(\d{2}).+Y=\s?([0-9Yy.]+)\s+X=\s?([0-9Xx.]+)\s+Pu=([0-9?])", line)
+            line_match = re.match(
+                r"(\d{4})(\d{2}).+Y=\s?([0-9Yy.]+)\s+X=\s?([0-9Xx.]+)\s+Pu=([0-9?])",
+                line
+            )
 
             if not line_match:
                 continue
@@ -144,9 +152,12 @@ class Parser:
             stop_data = {}
 
             # convert accessibility info → GTFS
-            if line_match[5] == "?": stop_data["wheelchair"] = "0"
-            elif int(line_match[5]) > 5: stop_data["wheelchair"] = "2"
-            else: stop_data["wheelchair"] = "1"
+            if line_match[5] == "?":
+                stop_data["wheelchair"] = "0"
+            elif int(line_match[5]) > 5:
+                stop_data["wheelchair"] = "2"
+            else:
+                stop_data["wheelchair"] = "1"
 
             # convert stop poisition
             if "y" in line_match[3].lower() or "x" in line_match[4].lower():
@@ -164,7 +175,7 @@ class Parser:
 
         raise EOFError("End of PR section was not reached before EOF!")
 
-    def parse_wk(self, route_id):
+    def parse_wk(self, route_id) -> Generator[dict, None, None]:
         """
         Skips to next WK section and parses data from there.
         A generator which yields for every trip:
@@ -223,7 +234,7 @@ class Parser:
 
         raise EOFError("End of section WK not reched before EOF!")
 
-    def parse_tr(self):
+    def parse_tr(self) -> Generator[dict, None, None]:
         """
         Skips to next TR section and parses data from there.
         A generator which yields for every variant of route:
@@ -242,7 +253,11 @@ class Parser:
                 return
 
             # regex for TR
-            line_match = re.match(r"([\w-]+)\s*,\s+([^,]{,30})[\s,]+([\w-]{2})\s+==>\s+([^,]{,30})[\s,]+([\w-]{2})\s+Kier\. (\w)\s+Poz. (\w)", line)
+            line_match = re.match(
+                r"([\w-]+)\s*,\s+([^,]{,30})[\s,]+([\w-]{2})\s+==>\s"
+                r"+([^,]{,30})[\s,]+([\w-]{2})\s+Kier\. (\w)\s+Poz. (\w)",
+                line
+            )
 
             if not line_match:
                 continue
@@ -258,7 +273,7 @@ class Parser:
 
         raise EOFError("End of section TR not reched before EOF!")
 
-    def parse_lw(self):
+    def parse_lw(self) -> Generator[dict, None, None]:
         """
         Skips to next LW section and parses data from there.
         A generator which yields for every stop of variant:
@@ -280,7 +295,11 @@ class Parser:
                 return
 
             # regex for LW
-            line_match = re.match(r".*(\d{6})\s+[^,]{,30}[\s,]+([\w-]{2})\s+\d\d\s+(NŻ|)\s*\|.*", line)
+            line_match = re.match(
+                r".*(\d{6})\s+[^,]{,30}[\s,]+([\w-]{2})\s+\d\d\s+(NŻ|)\s*\|.*",
+                line
+            )
+
             zone_match = re.match(r"=+\s+([\w\s]+)\s+=+", line)
 
             # change current zone
@@ -296,8 +315,7 @@ class Parser:
                     zone = "2"
 
                 else:
-                    raise ValueError("Unrecognized zone description inside LW: {!r}".format(zone_txt))
-
+                    raise ValueError(f"Unrecognized zone description inside LW: {zone_txt!r}")
 
             elif line_match:
                 stop_data = {
@@ -316,7 +334,11 @@ class Parser:
 
         raise EOFError("End of section LW not reched before EOF!")
 
-    def _parse_single_wgod(self, route_type, route_id):
+    def _parse_single_wgod(self, route_type, route_id) -> Generator[dict, None, None]:
+        """
+        Yield data for every trip inside section *OD and combine data with
+        info about accessibility included in section *WG
+        """
         inside_wg = True
         inside_od = False
 
@@ -358,7 +380,7 @@ class Parser:
                     else:
                         accessible = True
 
-                    wg_data[ normal_time(hour + "." + minutes) ] = {
+                    wg_data[normal_time(hour + "." + minutes)] = {
                         "accessible": accessible,
                     }
 
@@ -375,21 +397,19 @@ class Parser:
 
                 # ignore departures not found inside OD
                 if time not in wg_data:
-                    warn("Departure in OD ({}, {}) unmatched with anything in WG".format(time, trip_id))
+                    warn(f"Departure in OD ({time}, {trip_id}) unmatched with anything in WG")
                     continue
 
                 # combine data from OD with data from WG
-                dep_data = {
-                    **wg_data[time],
-                    "time": time,
-                    "id": trip_id,
-                }
+                dep_data = wg_data[time]
+                dep_data["time"] = time
+                dep_data["id"] = trip_id
 
                 yield dep_data
 
         raise EOFError("End of section WG/OD not reched before EOF!")
 
-    def parse_wgod(self, route_type, route_id):
+    def parse_wgod(self, route_type, route_id) -> Generator[dict, None, None]:
         """
         Skips to next WG section and join data from WG to OD section,
         and parse it until finiding the end of section PR.
@@ -407,7 +427,7 @@ class Parser:
 
             more_wgod = self.find_another("WG", "RP")
 
-    def parse_ll(self):
+    def parse_ll(self) -> Generator[dict, None, None]:
         """
         Skips to next LL section and parse it.
         A generator which yields for every route:
@@ -442,6 +462,10 @@ class Parser:
         raise EOFError("End of section LL not reched before EOF!")
 
     def skip_to_section(self, section, end=False):
+        """
+        Skips to provided section, so that the next line will be the one after *SECTION_CODE
+        If end is True, skips to the end of the given section.
+        """
         join_char = "*" if not end else "#"
         for line in self.reader:
             line = line.strip()
@@ -451,7 +475,12 @@ class Parser:
 
         raise EOFError("Start of section " + section + " not found before EOF")
 
-    def find_another(self, section, finish):
+    def find_another(self, section, finish) -> str:
+        """
+        Check if there is another section, until finish-section is reached.
+        Returns "more" if a section start was encountered,
+        and "end" if closing tag of finish-section was reached.
+        """
         for line in self.reader:
             line = line.strip()
 

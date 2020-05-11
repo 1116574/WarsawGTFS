@@ -58,7 +58,7 @@ class MultiDay:
 
             # We don't need anything for previous dates
             if file_end < today: continue
-            
+
             # Get file modification time (to recreate GTFS if a newer version was uploaded)
             file_mod = datetime.strptime(file_attr["modify"], "%Y%m%d%H%M%S")
 
@@ -264,7 +264,10 @@ class MultiDay:
                 for row in csv.DictReader(io.TextIOWrapper(buff, encoding="utf8", newline="")):
 
                     # Ignore trips which service is not active in version's effective range
-                    if row["trip_id"].split("/")[2] not in active_services:
+                    trip_id_split = row["trip_id"].split("/")
+                    service_id = trip_id_split[0] + "/" + trip_id_split[2]
+
+                    if service_id not in active_services:
                         continue
 
                     row["trip_id"] = feed["ver"] + "/" + row["trip_id"]
@@ -332,14 +335,14 @@ class MultiDay:
     def create_stops(self):
         # Open file
         file = open("gtfs/stops.txt", mode="w", encoding="utf8", newline="")
-        
+
         writer = csv.DictWriter(
             file,
             ["stop_id", "stop_name", "stop_lat", "stop_lon", "location_type", "parent_station",
-            "stop_IBNR", "stop_PKPPLK", "platform_code", "wheelchair_boarding"],
+             "zone_id", "stop_IBNR", "stop_PKPPLK", "platform_code", "wheelchair_boarding"],
             extrasaction="ignore"
         )
-        
+
         writer.writeheader()
 
         # Export stops to GTFS

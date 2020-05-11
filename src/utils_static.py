@@ -106,6 +106,12 @@ def trip_direction(trip_original_stops, direction_stops):
     else:
         raise RuntimeError(f"{trip_stops_0_len} is not bigger, equal or less then {trip_stops_1_len}")
 
+def match_day_type(used_day_types, possible_day_types):
+    for day_type in possible_day_types:
+        if day_type in used_day_types:
+            return day_type
+    return None
+
 class Metro:
     def __init__(self):
         self.valid_calendars = set()
@@ -249,7 +255,6 @@ class Metro:
 
 class Shaper:
     def __init__(self, bus_router=None, train_router=None, tram_router=None):
-        self.stops = {}
         self.trips = {}
         self.osm_stops = {}
         self.failed = set()
@@ -353,11 +358,11 @@ class Shaper:
 
         return router
 
-    def rotue_between_stops(self, start_stop, end_stop, route_type):
+    def rotue_between_stops(self, start_stop_data, end_stop_data, route_type):
         #print("\033[1A\033[K" + "Getting shape between {} and {}".format(start_stop, end_stop)) # DEBUG
         # Find nodes
-        start_lat, start_lon = map(float, self.stops[start_stop])
-        end_lat, end_lon = map(float, self.stops[end_stop])
+        start_stop, start_lat, start_lon = start_stop_data
+        end_stop, end_lat, end_lon = end_stop_data
 
         # Start node
         if route_type == "3" and self.osm_stops.get(start_stop, None) in self.bus_router.rnodes:
@@ -377,7 +382,7 @@ class Shaper:
             if route_type == "3": end = self.bus_router.findNode(end_lat, end_lon)
             elif route_type == "2": end = self.train_router.findNode(end_lat, end_lon)
             elif route_type == "0": end = self.tram_router.findNode(end_lat, end_lon)
-            else: raise ValuError("invalid type: {}".format(route_type))
+            else: raise ValueError("invalid type: {}".format(route_type))
 
         # Do route
 
@@ -388,14 +393,14 @@ class Shaper:
                     if route_type == "3": status, route = self.bus_router.doRoute(start, end)
                     elif route_type == "2": status, route = self.train_router.doRoute(start, end)
                     elif route_type == "0": status, route = self.tram_router.doRoute(start, end)
-                    else: raise ValuError("invalid type: {}".format(route_type))
+                    else: raise ValueError("invalid type: {}".format(route_type))
             except TimeoutError:
                 status, route = "timeout", []
 
             if route_type == "3": route_points = list(map(self.bus_router.nodeLatLon, route))
             elif route_type == "2": route_points = list(map(self.train_router.nodeLatLon, route))
             elif route_type == "0": route_points = list(map(self.tram_router.nodeLatLon, route))
-            else: raise ValuError("invalid type: {}".format(route_type))
+            else: raise ValueError("invalid type: {}".format(route_type))
 
             try: dist_ratio = iter_haversine(route_points) / haversine([start_lat, start_lon], [end_lat, end_lon])
             except ZeroDivisionError: dist_ratio = 1
@@ -497,7 +502,6 @@ class Shaper:
         self.writer = csv.writer(self.file)
         self.writer.writerow(["shape_id", "shape_pt_sequence", "shape_dist_traveled", "shape_pt_lat", "shape_pt_lon"])
 
-        self.stops = {}
         self.trips = {}
         self.failed = set()
 

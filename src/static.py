@@ -1,50 +1,338 @@
 from collections import OrderedDict
 from tempfile import NamedTemporaryFile
+from typing import AbstractSet, Mapping, Optional
 from warnings import warn
-from datetime import date
+from datetime import date, datetime, timedelta
 from ftplib import FTP
 import libarchive.public
 import requests
+import zipfile
 import json
 import csv
 import re
 import os
 
-from .utils_static import *
+from .const import HEADERS, ACTIVE_RAIL_STATIONS, PROPER_STOP_NAMES
+
+from .utils_static import route_color_type, normal_stop_name, normal_time, \
+    should_town_be_added_to_name, proper_headsign, trip_direction, match_day_type, \
+    Shaper, Metro
+
+from .utils import clear_directory, avg_position
+
 from .parser import Parser
-from .utils import *
 
-# List of rail stops used by S× lines. Other rail stops are ignored.
-ACTIVE_RAIL_STATIONS = {
-    "4900", "4901", "7900", "7901", "7902", "2901", "2900", "2918", "2917", "2916", "2915",
-    "2909", "2908", "2907", "2906", "2905", "2904", "2903", "2902", "4902", "4903", "4923",
-    "4904", "4905", "2914", "2913", "2912", "2911", "2910", "4919", "3901", "4918", "4917",
-    "4913", "1910", "1909", "1908", "1907", "1906", "1905", "1904", "1903", "1902", "1901",
-    "7903", "5908", "5907", "5904", "5903", "5902", "1913", "1914", "1915",
-}
+class StopHandler:
+    def __init__(self):
+        # Stop data
+        self.data = OrderedDict()
+        self.names = PROPER_STOP_NAMES.copy()
+        self.parents = {}
+        self.zones = {}
 
-PROPER_STOP_NAMES = {
-    "4040": "Lotnisko Chopina",              "1484": "Dom Samotnej Matki",
-    "2005": "Praga-Płd. - Ratusz",           "1541": "Marki Bandurskiego I",
-    "5001": "Połczyńska - Parking P+R",      "2296": "Szosa Lubelska",
-    "6201": "Lipków Paschalisa-Jakubowicza", "1226": "Mańki-Wojody",
-    "2324": "Wiązowna",
-}
+        # Invalid stop data
+        self.invalid = {}
+        self.change = {}
+
+        # Used stops
+        self.used_invalid = set()
+        self.used = set()
+
+        # External data
+        print("\033[1A\033[K" + "Loading external data about stops")
+
+        self.missing_stops = requests.get(
+            "https://gist.githubusercontent.com/MKuranowski/0ca97a012d541899cb1f859cd0bab2e7/"
+            "raw/missing_stops.json").json()
+
+        self.rail_platforms = requests.get(
+            "https://gist.githubusercontent.com/MKuranowski/0ca97a012d541899cb1f859cd0bab2e7/"
+            "raw/rail_platforms.json").json()
+
+    @staticmethod
+    def _match_virtual(virt: dict, stakes: list) -> Optional[str]:
+        """Try to find a normal stake corresponding to given virtual stake"""
+        # Find normal stakes with matching position
+        if virt["lat"] is not None and virt["lon"] is not None:
+            with_same_pos = [i["id"] for i in stakes if i["code"][0] != "8"
+                             and i["lat"] == virt["lat"] and i["lon"] == virt["lon"]]
+        else:
+            with_same_pos = []
+
+        # Find normal stakes with matching code
+        with_same_code = [i["id"] for i in stakes if i["code"][0] != "8"
+                          and i["lat"] == virt["lat"] and i["lon"] == virt["lon"]]
+
+        # Special Case: Metro Młociny 88 → Metro Młociny 28
+        if virt["id"] == "605988" and "605928" in with_same_code:
+            return "605928"
+
+        # Matched stakes with the same position
+        if with_same_pos:
+            return with_same_pos[0]
+
+        # Matched stakes with the same code
+        elif with_same_code:
+            return with_same_code[0]
+
+        # Unable to find a match
+        else:
+            return None
+
+    def _find_missing_positions(self, stakes: list) -> list:
+        for idx, stake in enumerate(stakes):
+
+            if stake["lat"] is None or stake["lon"] is None:
+                missing_pos = self.missing_stops.get(stake["id"])
+
+                if missing_pos:
+                    stakes[idx]["lat"], stakes[idx]["lon"] = missing_pos
+
+        return stakes
+
+    def _load_normal_group(self, group_name, stakes):
+        for stake in stakes:
+
+            # Fix virtual stops
+            if stake["code"][0] == "8":
+                change_to = self._match_virtual(stake, stakes)
+
+                if change_to is not None:
+                    self.change[stake["id"]] = change_to
+
+                else:
+                    self.invalid[stake["id"]] = stake
+
+                continue
+
+            # Handle undefined stop positions
+            if stake["lat"] is None or stake["lon"] is None:
+                self.invalid[stake["id"]] = stake
+                continue
+
+            # Save stake into self.data
+            self.data[stake["id"]] = {
+                "stop_id": stake["id"],
+                "stop_name": f'{group_name} {stake["code"]}',
+                "stop_lat": stake["lat"],
+                "stop_lon": stake["lon"],
+                "wheelchair_boarding": stake["wheelchair"],
+            }
+
+    def _load_railway_group(self, group_id, group_name, stakes):
+        # Nop KM & WKD stations
+        if group_id not in ACTIVE_RAIL_STATIONS:
+            for i in stakes:
+                self.change[i["id"]] = None
+            return
+
+        # Load station info
+        station_data = self.rail_platforms.get(group_id, {})
+
+        # If this station is not in rail_platforms, average all stake positions
+        # In order to calculate an approx position of the station
+        if not station_data:
+            stake_positions = [(i["lat"], i["lon"]) for i in stakes if
+                               i["lat"] is not None and i["lon"] is not None]
+
+            if stake_positions:
+                station_lat, station_lon = avg_position(stake_positions)
+
+            # Halt processing if we have no geographical data
+            else:
+                for i in stakes:
+                    self.change[i["id"]] = None
+                return
+
+        # Otherwise get the position from rail_platforms data
+        else:
+            station_lat, station_lon = map(float, station_data["pos"].split(","))
+            group_name = station_data["name"]
+
+        # Map every stake into one node
+        if (not station_data) or station_data["oneplatform"]:
+
+            self.data[group_id] = {
+                "stop_id": group_id,
+                "stop_name": group_name,
+                "stop_lat": station_lat,
+                "stop_lon": station_lon,
+                "zone_id": station_data.get("zone_id", ""),
+                "stop_IBNR": station_data.get("ibnr_code", ""),
+                "stop_PKPPLK": station_data.get("pkpplk_code", ""),
+                "wheelchair_boarding": station_data.get("wheelchair", "0"),
+            }
+
+            for i in stakes:
+                self.change[i["id"]] = group_id
+
+        # Process multi-platform station
+        else:
+            # Add hub entry
+            self.data[group_id] = {
+                "stop_id": group_id,
+                "stop_name": group_name,
+                "stop_lat": station_lat,
+                "stop_lon": station_lon,
+                "location_type": "1",
+                "parent_station": "",
+                "zone_id": station_data.get("zone_id", ""),
+                "stop_IBNR": station_data.get("ibnr_code", ""),
+                "stop_PKPPLK": station_data.get("pkpplk_code", ""),
+                "wheelchair_boarding": station_data.get("wheelchair", "0"),
+            }
+
+            # Platforms
+            for platform_id, platform_pos in station_data["platforms"].items():
+                platform_lat, platform_lon = map(float, platform_pos.split(","))
+                platform_code = platform_id.split("p")[1]
+                platform_name = f"{group_name} peron {platform_code}"
+
+                # Add platform entry
+                self.data[platform_id] = {
+                    "stop_id": platform_id,
+                    "stop_name": platform_name,
+                    "stop_lat": platform_lat,
+                    "stop_lon": platform_lon,
+                    "location_type": "0",
+                    "parent_station": group_id,
+                    "zone_id": station_data.get("zone_id", ""),
+                    "stop_IBNR": station_data.get("ibnr_code", ""),
+                    "stop_PKPPLK": station_data.get("pkpplk_code", ""),
+                    "wheelchair_boarding": station_data.get("wheelchair", "0"),
+                }
+
+                # Add to self.parents
+                self.parents[platform_id] = group_id
+
+            # Stops → Platforms
+            for stake in stakes:
+
+                # Defined stake in rail_platforms
+                if stake["id"] in station_data["stops"]:
+                    self.change[stake["id"]] = station_data["stops"][stake["id"]]
+
+                # Unknown stake
+                elif stake["id"] not in {"491303", "491304"}:
+                    warn(f'No platform defined for railway PR entry {group_name} {stake["id"]}')
+
+    def load_group(self, group_info, stakes):
+        # Fix name "Kampinoski Pn" town name
+        if group_info["town"] == "Kampinoski Pn":
+            group_info["town"] = "Kampinoski PN"
+
+        # Fix group name
+        group_info["name"] = normal_stop_name(group_info["name"])
+
+        # Add town name to stop name & save name to self.names
+        if group_info["id"] in self.names:
+            group_info["name"] = self.names[group_info["id"]]
+
+        elif should_town_be_added_to_name(group_info):
+            group_info["name"] = f'{group_info["town"]} {group_info["name"]}'
+            self.names[group_info["id"]] = group_info["name"]
+
+        else:
+            self.names[group_info["id"]] = group_info["name"]
+
+        # Add missing positions to stakes
+        stakes = self._find_missing_positions(stakes)
+
+        # Parse stakes
+        if group_info["id"][1:3] in {"90", "91", "92"}:
+            self._load_railway_group(group_info["id"], group_info["name"], stakes)
+
+        else:
+            self._load_normal_group(group_info["name"], stakes)
+
+    def get_id(self, original_id: str) -> Optional[str]:
+        """Should the stop_id be changed, provide the correct stop_id.
+        If given stop_id has its position undefined returns None.
+        """
+        valid_id = self.change.get(original_id, original_id)
+
+        if valid_id is None or valid_id in self.invalid:
+            self.used_invalid.add(valid_id)
+            return None
+
+        else:
+            return valid_id
+
+    def use(self, stop_id: str) -> None:
+        """Mark provided GTFS stop_id as used"""
+        # Check if this stop belogins to a larger group
+        parent_id = self.parents.get(stop_id)
+
+        # Mark the parent as used
+        if parent_id is not None:
+            self.used.add(parent_id)
+
+        self.used.add(stop_id)
+
+    def zone_set(self, group_id, zone_id):
+        current_zone = self.zones.get(group_id)
+
+        # Zone has not changed: skip
+        if current_zone == zone_id:
+            return
+
+        if current_zone is None:
+            self.zones[group_id] = zone_id
+
+        # Boundary stops shouldn't generate a zone conflict warning
+        elif current_zone == "1/2" or zone_id == "1/2":
+            self.zones[group_id] = "1/2"
+
+        else:
+
+            warn(f"Stop group {group_id} has a zone confict: it was set to {current_zone!r}, "
+                 f"but now it needs to be set to {zone_id!r}")
+
+            self.zones[group_id] = "1/2"
+
+    def export(self):
+        print("\033[1A\033[K" + "Exporting stops")
+
+        # Export all stops
+        with open("gtfs/stops.txt", mode="w", encoding="utf8", newline="") as f:
+            writer = csv.DictWriter(f, HEADERS["stops.txt"])
+            writer.writeheader()
+
+            for stop_id, stop_data in self.data.items():
+                # Check if stop was used or (is a part of station and not a stop-chlid)
+                if stop_id in self.used or (stop_data.get("parent_station") in self.used
+                                            and stop_data.get("location_type") != "1"):
+
+                    # Set the zone_id
+                    if not stop_data.get("zone_id"):
+                        zone_id = self.zones.get(stop_id[:4])
+
+                        if zone_id is None:
+                            warn(f"Stop group {stop_id[:4]} has no zone_id assigned (using '1/2')")
+                            zone_id = "1/2"
+
+                        stop_data["zone_id"] = zone_id
+
+                    writer.writerow(stop_data)
+
+        # Calculate unused stos from missing
+        unused_missing = set(self.missing_stops.keys()).difference(self.used_invalid)
+
+        # Dump missing stops info
+        with open("missing_stops.json", "w") as f:
+            json.dump({"missing": sorted(self.used_invalid), "unused": sorted(unused_missing)},
+                      f, indent=2)
 
 class Converter:
-    def __init__(self, version="", shapes=False, clear_shape_errors=True):
+    def __init__(self, shapes=False, clear_shape_errors=True):
         clear_directory("gtfs")
-        if clear_shape_errors: clear_directory("shape-errors")
 
-        # Stop info
-        self.missing_stops = requests.get("https://gist.githubusercontent.com/MKuranowski/0ca97a012d541899cb1f859cd0bab2e7/raw/missing_stops.json").json()
-        self.rail_platforms = requests.get("https://gist.githubusercontent.com/MKuranowski/0ca97a012d541899cb1f859cd0bab2e7/raw/rail_platforms.json").json()
+        if clear_shape_errors:
+            clear_directory("shape-errors")
 
-        self.incorrect_stops = []
-        self.unused_stops = list(self.missing_stops.keys())
-        self.stops_map = {}
-
-        self.stop_names = PROPER_STOP_NAMES.copy()
+        # Data handlers
+        self.stops = StopHandler()
+        self.calendars = {}
 
         # File handler
         self.version = None
@@ -63,10 +351,35 @@ class Converter:
         else:
             self.shapes = None
 
-        self.get_file(version)
+    def open_files(self):
+        self.file_routes = open("gtfs/routes.txt", mode="w", encoding="utf-8", newline="")
+        self.wrtr_routes = csv.DictWriter(self.file_routes, HEADERS["routes.txt"])
+        self.wrtr_routes.writeheader()
+
+        self.file_trips = open("gtfs/trips.txt", mode="w", encoding="utf-8", newline="")
+        self.wrtr_trips = csv.DictWriter(self.file_trips, HEADERS["trips.txt"])
+        self.wrtr_trips.writeheader()
+
+        self.file_times = open("gtfs/stop_times.txt", mode="w", encoding="utf-8", newline="")
+        self.wrtr_times = csv.DictWriter(self.file_times, HEADERS["stop_times.txt"])
+        self.wrtr_times.writeheader()
+
+        self.file_dates = open("gtfs/calendar_dates.txt", mode="w", encoding="utf-8", newline="")
+        self.wrtr_dates = csv.DictWriter(self.file_dates, HEADERS["calendar_dates.txt"])
+        self.wrtr_dates.writeheader()
+
+    def close_files(self):
+        self.file_routes.close()
+        self.file_trips.close()
+        self.file_times.close()
+        self.file_dates.close()
 
     def get_file(self, version):
-        "Download and decompress schedules for current data. Returns tuple (TemporaryFile, version) - and that TemporaryFile is decompressed .TXT file"
+        """Download and decompress schedules for current data.
+        Returns tuple (TemporaryFile, version) -
+        and that TemporaryFile is decompressed .txt file
+        """
+
         # Login to ZTM server and get the list of files
         server = FTP("rozklady.ztm.waw.pl")
         server.login()
@@ -76,15 +389,17 @@ class Converter:
         if version:
             fname = "{}.7z".format(version)
             if fname not in files:
-                raise KeyError("Requested file version ({}) not found on ZTM server".format(version))
+                raise KeyError(f"Requested file version ({version}) not found on ZTM server")
 
         # If not, find one valid today
         else:
             fdate = date.today()
             while True:
                 fname = fdate.strftime("RA%y%m%d.7z")
-                if fname in files: break
-                else: fdate -= timedelta(days=1)
+                if fname in files:
+                    break
+                else:
+                    fdate -= timedelta(days=1)
 
         # Create temporary files for storing th 7z archive and the compressed TXT file
         temp_arch = NamedTemporaryFile(mode="w+b", delete=False)
@@ -101,14 +416,14 @@ class Converter:
 
                 # Iterate over each file inside the archive
                 for arch_file in arch:
+                    name = arch_file.pathname.upper()
 
                     # Assert the file inside the archive is the TXT file we're looking for
-                    name_match = re.fullmatch(r"(RA\d{6})\.TXT", arch_file.pathname, flags=re.IGNORECASE)
-                    if not name_match:
+                    if not name.startswith("RA") or not name.endswith(".TXT"):
                         continue
 
                     # Save the feed version
-                    self.version = name_match[1].upper()
+                    self.version = name[:8]
 
                     # Decompress the TXT file block by block and save it to the reader
                     for block in arch_file.get_blocks():
@@ -119,7 +434,7 @@ class Converter:
                     break
 
                 else:
-                    raise FileNotFoundError("no schedule file found inside archive {}".format(fname))
+                    raise FileNotFoundError(f"no schedule file found inside archive {fname!r}")
 
         # Remove the temp arch file at the end
         finally:
@@ -127,240 +442,28 @@ class Converter:
 
         self.parser = Parser(self.reader)
 
-    def calendar(self):
-        file = open("gtfs/calendar_dates.txt", mode="w", encoding="utf8", newline="")
-        writer = csv.writer(file)
-        writer.writerow(["service_id", "date", "exception_type"])
-
-        print("\033[1A\033[K" + "Parsing calendars (KA)")
+    def get_calendars(self):
+        print("\033[1A\033[K" + "Loading calendars (KA)")
+        this_month = date.today().replace(day=1)
 
         for day in self.parser.parse_ka():
-            for service_id in day["services"]:
-                writer.writerow([service_id, day["date"], "1"])
+            if day["date"] < this_month:
+                continue
 
-        file.close()
+            self.calendars[day["date"]] = day["services"]
 
-    def _stopgroup_railway(self, writer, group_id, group_name):
-        # Load ZTM stakes from PR section
-        # self.parser.parse_pr() has to be called to skip to the next entry in ZP
-        stakes = list(self.parser.parse_pr())
-
-        # If group is not in ACTIVE_RAIL_STATIONS, ignore it
-        if group_id not in ACTIVE_RAIL_STATIONS:
-            for s in stakes: self.stops_map[s["id"]] = None
-            return
-
-        # Basic info about the station
-        station_info = self.rail_platforms.get(group_id, {})
-
-        # If this station is not in rail_platforms, average all stake positions
-        # In order to calculate an approx position of the station
-        if not station_info:
-            stake_positions = [(i["lat"], i["lon"]) for i in stakes]
-            stake_positions = [i for i in stake_positions if i[0] and i[1]]
-
-            if stake_positions:
-                station_lat, station_lon = avg_position(stake_positions)
-
-            # No position for the station
-            else:
-                for s in stakes: self.stops_map[s["id"]] = None
-                self.incorrect_stops.append(group_id)
-                return
-
-        # Otherwise get the position from rail_platforms data
-        else:
-            station_lat, station_lon = map(float, station_info["pos"].split(","))
-            group_name = station_info["name"]
-
-        # One Platform or No Platform data
-        if (not station_info) or station_info["oneplatform"]:
-            # Save position for shapes
-            if self.shapes:
-                self.shapes.stops[group_id] = station_lat, station_lon
-
-            # Add info for stops_map
-            for stake in stakes:
-                self.stops_map[stake["id"]] = group_id
-
-            # Output info to GTFS
-            writer.writerow([
-                group_id, group_name, station_lat, station_lon,
-                "", "", station_info.get("ibnr_code", ""),
-                station_info.get("pkpplk_code", ""),
-                "", station_info.get("wheelchair", 0),
-            ])
-
-        # Multi-Platform station
-        else:
-            # Hub entry
-            writer.writerow([
-                group_id, group_name, station_lat, station_lon,
-                "1", "", station_info.get("ibnr_code", ""),
-                station_info.get("pkpplk_code", ""),
-                "", station_info.get("wheelchair", 0),
-            ])
-
-            # Platforms
-            for platform_id, platform_pos in station_info["platforms"].items():
-                platform_lat, platform_lon = map(float, platform_pos.split(","))
-                platform_code = platform_id.split("p")[1]
-                platform_name = f"{group_name} peron {platform_code}"
-
-                # Save position for shapes
-                if self.shapes:
-                    self.shapes.stops[platform_id] = platform_lat, platform_lon
-
-                # Output to GTFS
-                writer.writerow([
-                    platform_id, platform_name, platform_lat, platform_lon,
-                    "0", group_id, station_info.get("ibnr_code", ""),
-                    station_info.get("pkpplk_code", ""),
-                    platform_code, station_info.get("wheelchair", 0),
-                ])
-
-            # Stops → Platforms
-            for stake in stakes:
-                # Defined stake in rail_platforms
-                if stake["id"] in station_info["stops"]:
-                    self.stops_map[stake["id"]] = station_info["stops"][stake["id"]]
-
-                # Unknown stake
-                elif stake["id"] not in {"491303", "491304"}:
-                    warn(f'No platform defined for railway PR entry {group_name} {stake["id"]}')
-
-    def _stopgroup_normal(self, writer, group_id, group_name):
-        # Load ZTM stakes from PR section
-        # self.parser.parse_pr() has to be called to skip to the next entry in ZP
-        stakes = list(self.parser.parse_pr())
-
-        # Split virtual stakes from normal stakes
-        virtual_stakes = [i for i in stakes if i["code"][0] == "8"]
-        normal_stakes = [i for i in stakes if i["code"][0] != "8"]
-
-
-        # Load positions from missing_stops to normal_stakes
-        for idx, stake in enumerate(normal_stakes):
-            if (stake["lat"] == None or stake["lon"] == None) and \
-                                          stake["id"] in self.missing_stops:
-
-                self.unused_stops.remove(stake["id"])
-                stake["lat"], stake["lon"] = self.missing_stops[stake["id"]]
-                normal_stakes[idx] = stake
-
-        position_stakes = [i for i in normal_stakes if i["lat"] and i["lon"]]
-
-        # Convert normal stakes
-        for stake in normal_stakes:
-
-            # Position defined
-            if stake["lat"] and stake["lon"]:
-
-                # Save position for shapes
-                if self.shapes:
-                    self.shapes.stops[stake["id"]] = stake["lat"], stake["lon"]
-
-                # Output info to GTFS
-                writer.writerow([
-                    stake["id"], f'{group_name} {stake["code"]}',
-                    stake["lat"], stake["lon"],
-                    "", "", "", "", "", stake["wheelchair"],
-                ])
-
-            # Position undefined
-            else:
-                self.stops_map[stake["id"]] = None
-                self.incorrect_stops.append(stake["id"])
-
-        # Convert virtual stops
-        for stake in virtual_stakes:
-
-            stakes_with_same_pos = [i["id"] for i in position_stakes if \
-                           (i["lat"], i["lon"]) == (stake["lat"], stake["lon"])]
-
-            stakes_with_same_code = [i["id"] for i in position_stakes if \
-                                               i["code"][1] == stake["code"][1]]
-
-            # Metro Młociny 88 → Metro Młociny 28
-            if stake["id"] == "605988":
-                counterpart_available = [i for i in position_stakes if \
-                                                            i["id"] == "605928"]
-
-                # If 605928 is present, map 605988 to it.
-                # Otherwise fallback on defualt maching options
-                if counterpart_available:
-                    self.stops_map["605988"] = "605928"
-                    continue
-
-            # Map to a stake with same position
-            if stakes_with_same_pos:
-                self.stops_map[stake["id"]] = stakes_with_same_pos[0]
-
-            # Map to a stake with same digit
-            elif stakes_with_same_code:
-                self.stops_map[stake["id"]] = stakes_with_same_code[0]
-
-            # Unable find a matching stake
-            else:
-                self.stops_map[stake["id"]] = None
-                self.incorrect_stops.append(stake["id"])
-
-    def stops(self):
-        file = open("gtfs/stops.txt", mode="w", encoding="utf8", newline="")
-        writer = csv.writer(file)
-
-        writer.writerow([
-            "stop_id", "stop_name", "stop_lat", "stop_lon",
-            "location_type", "parent_station", "stop_IBNR",
-            "stop_PKPPLK", "platform_code", "wheelchair_boarding"
-        ])
-
-        print("\033[1A\033[K" + "Parsing stops (ZP)")
+    def get_stops(self):
+        print("\033[1A\033[K" + "Loading stops (ZP)")
 
         for group in self.parser.parse_zp():
-            # Fix town name for Kampinoski PN
-            if group["town"] == "Kampinoski Pn":
-                group["town"] = "Kampinoski PN"
+            stakes = list(self.parser.parse_pr())
+            self.stops.load_group(group, stakes)
 
-            # Add name to self.stop_names if it's missing
-            if group["id"] not in self.stop_names:
-                group["name"] = normal_stop_name(group["name"])
-                self.stop_names[group["id"]] = group["name"]
-
-            else:
-                group["name"] = self.stop_names[group["id"]]
-
-            # Add town name to stop name
-            if should_town_be_added_to_name(group):
-                group["name"] = f'{group["town"]} {group["name"]}'
-                self.stop_names[group["id"]] = group["name"]
-
-            # Parse stakes
-            if group["id"][1:3] in {"90", "91", "92"}:
-                self._stopgroup_railway(writer, group["id"], group["name"])
-
-            else:
-                self._stopgroup_normal(writer, group["id"], group["name"])
-
-        file.close()
-
-    def routes_schedules(self):
-        file_routes = open("gtfs/routes.txt", mode="w", encoding="utf8", newline="")
-        writer_routes = csv.writer(file_routes)
-        writer_routes.writerow(["agency_id", "route_id", "route_short_name", "route_long_name", "route_type", "route_color", "route_text_color", "route_sort_order"])
-
-        file_trips = open("gtfs/trips.txt", mode="w", encoding="utf8", newline="")
-        writer_trips = csv.writer(file_trips)
-        writer_trips.writerow(["route_id", "service_id", "trip_id", "trip_headsign", "direction_id", "shape_id", "exceptional", "wheelchair_accessible", "bikes_allowed"])
-
-        file_times = open("gtfs/stop_times.txt", mode="w", encoding="utf8", newline="")
-        writer_times = csv.writer(file_times)
-        writer_times.writerow(["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence", "pickup_type", "drop_off_type", "shape_dist_traveled"])
-
-        route_sort_order = 1 # Leave first 2 blank for M1 and M2 routes
+    def get_schedules(self):
+        route_sort_order = 1  # Leave first 2 blank for M1 and M2 routes
         route_id = None
 
-        print("\033[1A\033[K" + "Parsing routes & schedules (LL)")
+        print("\033[1A\033[K" + "Parsing schedules (LL)")
 
         for route in self.parser.parse_ll():
             route_id, route_desc = route["id"], route["desc"]
@@ -372,7 +475,6 @@ class Converter:
 
             print("\033[1A\033[K" + f"Parsing routes & schedules (LL) - {route_id}")
 
-
             route_sort_order += 1
             route_type, route_color, route_text_color = route_color_type(route_id, route_desc)
 
@@ -381,6 +483,7 @@ class Converter:
             direction_stops = {"0": set(), "1": set()}
             on_demand_stops = set()
             inaccesible_trips = set()
+            used_day_types = set()
             variant_directions = {}
 
             # Variants
@@ -391,20 +494,24 @@ class Converter:
 
                 stops = list(self.parser.parse_lw())
 
+                # add zones
+                for stop in stops:
+                    self.stops.zone_set(stop["id"][:4], stop["zone"])
+
                 # variant direction
                 variant_directions[variant["id"]] = variant["direction"]
 
                 # route_name should be the name of first and last stop of 1st variant
                 if not route_name:
                     route_name = " — ".join([
-                        self.stop_names[stops[0]["id"][:4]],
-                        self.stop_names[stops[-1]["id"][:4]]
+                        self.stops.names[stops[0]["id"][:4]],
+                        self.stops.names[stops[-1]["id"][:4]]
                     ])
 
                 # add on_demand_stops from this variant
                 on_demand_stops |= {i["id"] for i in stops if i["on_demand"]}
 
-                # add stopids to proper direction in direction_stops
+                # add stop_ids to proper direction in direction_stops
                 direction_stops[variant["direction"]] |= {i["id"] for i in stops}
 
                 # now parse ODWG sections - for inaccesible trips (only tram)
@@ -426,22 +533,23 @@ class Converter:
                 # Change stop_ids based on stops_map
                 for stopt in trip["stops"]:
                     stopt["orig_stop"] = stopt.pop("stop")
-                    stopt["stop"] = self.stops_map.get(
-                        stopt["orig_stop"], stopt["orig_stop"]
-                    )
+                    stopt["stop"] = self.stops.get_id(stopt["orig_stop"])
 
                 # Fliter "None" stops
                 trip["stops"] = [i for i in trip["stops"] if i["stop"]]
 
                 # Ignore trips with only 1 stopt
-                if len(trip["stops"]) < 2: continue
+                if len(trip["stops"]) < 2:
+                    continue
 
                 # Unpack info from trip_id
                 trip_id = trip["id"]
 
                 trip_id_split = trip_id.split("/")
                 variant_id = trip_id_split[1]
-                service_id = trip_id_split[2]
+
+                day_type = trip_id_split[2]
+                service_id = route_id + "/" + day_type
 
                 del trip_id_split
 
@@ -453,8 +561,18 @@ class Converter:
 
                 # Shapes
                 if self.shapes:
+                    stop_data_list = [
+                        (
+                            i["stop"],
+                            self.stops.data[i["stop"]]["stop_lat"],
+                            self.stops.data[i["stop"]]["stop_lon"],
+                        )
+                        for i in trip["stops"]
+                    ]
+
                     shape_id, shape_distances = self.shapes.get(
-                        route_type, trip_id, [i["stop"] for i in trip["stops"]])
+                        route_type, trip_id, stop_data_list
+                    )
 
                 else:
                     shape_id, shape_distances = "", {}
@@ -476,118 +594,170 @@ class Converter:
                     variant_directions[variant_id] = direction
 
                 # Headsign
+                last_stop = trip["stops"][-1]["stop"]
                 headsign = proper_headsign(
-                    trip["stops"][-1]["stop"],
-                    self.stop_names.get(trip["stops"][-1]["stop"][:4], ""))
+                    last_stop,
+                    self.stops.names.get(last_stop[:4], "")
+                )
 
                 if not headsign:
                     warn(f"No headsign for trip {trip_id}")
 
+                # day type
+                used_day_types.add(day_type)
+
                 # Write to trips.txt
-                writer_trips.writerow([
-                    route_id, service_id, trip_id, headsign, direction,
-                    shape_id, exceptional, wheelchair, "1",
-                ])
+                self.wrtr_trips.writerow({
+                    "route_id": route_id,
+                    "service_id": service_id,
+                    "trip_id": trip_id,
+                    "trip_headsign": headsign,
+                    "direction_id": direction,
+                    "shape_id": shape_id,
+                    "exceptional": exceptional,
+                    "wheelchair_accessible": wheelchair,
+                    "bikes_allowed": "1",
+                })
 
                 max_seq = len(trip["stops"]) - 1
 
                 # StopTimes
                 for seq, stopt in enumerate(trip["stops"]):
                     # Pickup Type
-                    if seq == max_seq: pickup = "1"
-                    elif "P" in stopt["flags"]: pickup = "1"
-                    elif stopt["orig_stop"] in on_demand_stops: pickup = "3"
-                    else: pickup = "0"
+                    if seq == max_seq:
+                        pickup = "1"
+                    elif "P" in stopt["flags"]:
+                        pickup = "1"
+                    elif stopt["orig_stop"] in on_demand_stops:
+                        pickup = "3"
+                    else:
+                        pickup = "0"
 
                     # Drop-Off Type
-                    if seq == 0: dropoff = "1"
-                    elif stopt["orig_stop"] in on_demand_stops: dropoff = "3"
-                    else: dropoff = "0"
+                    if seq == 0:
+                        dropoff = "1"
+                    elif stopt["orig_stop"] in on_demand_stops:
+                        dropoff = "3"
+                    else:
+                        dropoff = "0"
 
                     # Shape Distance
                     stop_dist = shape_distances.get(seq, "")
-                    if stop_dist: stop_dist = round(stop_dist, 4)
+
+                    if stop_dist:
+                        stop_dist = round(stop_dist, 4)
+
+                    # Mark stop as used
+                    self.stops.use(stopt["stop"])
 
                     # Output to stop_times.txt
-                    writer_times.writerow([
-                        trip_id, stopt["time"], stopt["time"], stopt["stop"],
-                        seq, pickup, dropoff, stop_dist
-                    ])
+                    self.wrtr_times.writerow({
+                        "trip_id": trip_id,
+                        "arrival_time": stopt["time"],
+                        "departure_time": stopt["time"],
+                        "stop_id": stopt["stop"],
+                        "stop_sequence": seq,
+                        "pickup_type": pickup,
+                        "drop_off_type": dropoff,
+                        "shape_dist_traveled": stop_dist,
+                    })
+
+            # Services
+            for day, possible_day_types in self.calendars.items():
+                active_day_type = match_day_type(used_day_types, possible_day_types)
+                if active_day_type:
+                    self.wrtr_dates.writerow({
+                        "service_id": route_id + "/" + active_day_type,
+                        "date": day.strftime("%Y%m%d"),
+                        "exception_type": "1",
+                    })
 
             # Output to routes.txt
-            writer_routes.writerow([
-                "0", route_id, route_id, route_name, route_type,
-                route_color, route_text_color, route_sort_order
-            ])
-
-        file_routes.close()
-        file_trips.close()
-        file_times.close()
+            self.wrtr_routes.writerow({
+                "agency_id": "0",
+                "route_id": route_id,
+                "route_short_name": route_id,
+                "route_long_name": route_name,
+                "route_type": route_type,
+                "route_color": route_color,
+                "route_text_color": route_text_color,
+                "route_sort_order": route_sort_order,
+            })
 
     def parse(self):
-        self.calendar()
-        self.stops()
-        self.routes_schedules()
-
-    def dump_missing_stops(self):
-        with open("missing_stops.json", "w") as f:
-            json.dump(
-                {
-                    "missing": [int(i) for i in self.incorrect_stops],
-                    "unused": [int(i) for i in self.unused_stops],
-                },
-                f,
-                indent=0
-            )
+        self.get_calendars()
+        self.get_stops()
+        self.get_schedules()
+        self.stops.export()
 
     @staticmethod
     def static_files(shapes, version, download_time):
         "Create files that don't depend of ZTM file content"
-        file = open("gtfs/agency.txt", mode="w", encoding="utf8", newline="\r\n")
-        file.write('agency_id,agency_name,agency_url,agency_timezone,agency_lang,agency_phone,agency_fare_url\n')
-        file.write('0,"Warszawski Transport Publiczny","https://www.wtp.waw.pl",Europe/Warsaw,pl,19 115,"https://www.wtp.waw.pl/ceny-i-rodzaje-biletow/"\n')
-        file.close()
+        buff = open("gtfs/agency.txt", mode="w", encoding="utf8", newline="\r\n")
+        buff.write('agency_id,agency_name,agency_url,agency_timezone,agency_lang,agency_phone,'
+                   'agency_fare_url\n')
 
-        file = open("gtfs/feed_info.txt", mode="w", encoding="utf8", newline="\r\n")
-        file.write('feed_publisher_name,feed_publisher_url,feed_lang,feed_version\n')
-        file.write(f'"WarsawGTFS (provided by Mikołaj Kuranowski)","https://github.com/MKuranowski/WarsawGTFS",pl,{version}\n')
-        file.close()
+        buff.write('0,"Warszawski Transport Publiczny","https://www.wtp.waw.pl",Europe/Warsaw,pl,'
+                   '19 115,"https://www.wtp.waw.pl/ceny-i-rodzaje-biletow/"\n')
+        buff.close()
 
-        file = open("gtfs/attributions.txt", mode="w", encoding="utf8", newline="\r\n")
-        file.write('attribution_id,organization_name,is_producer,is_operator,is_authority,is_data_source,attribution_url\n')
-        file.write('0,"WarsawGTFS (provided by Mikołaj Kuranowski)",pl,1,0,0,0,"https://github.com/MKuranowski/WarsawGTFS"\n')
-        file.write(f'1,"ZTM Warszawa (retrieved {download_time})",pl,0,0,1,1,"https://ztm.waw.pl"\n')
+        buff = open("gtfs/feed_info.txt", mode="w", encoding="utf8", newline="\r\n")
+        buff.write('feed_publisher_name,feed_publisher_url,feed_lang,feed_version\n')
+        buff.write('"WarsawGTFS (provided by Mikołaj Kuranowski)",'
+                   f'"https://github.com/MKuranowski/WarsawGTFS",pl,{version}\n')
+        buff.close()
+
+        buff = open("gtfs/attributions.txt", mode="w", encoding="utf8", newline="\r\n")
+        buff.write('attribution_id,organization_name,is_producer,is_operator,is_authority,'
+                   'is_data_source,attribution_url\n')
+        buff.write('0,"WarsawGTFS (provided by Mikołaj Kuranowski)",pl,1,0,0,'
+                   '0,"https://github.com/MKuranowski/WarsawGTFS"\n')
+
+        buff.write(f'1,"ZTM Warszawa (retrieved {download_time})",pl,0,0,1,'
+                   '1,"https://ztm.waw.pl"\n')
 
         if shapes:
-            file.write('"Bus shapes (under ODbL licnese): © OpenStreetMap contributors",pl,0,0,1,1,"https://www.openstreetmap.org/copyright"\n')
+            buff.write('2,"Bus shapes (under ODbL licnese): © OpenStreetMap contributors",pl,0,0,1,'
+                       '1,"https://www.openstreetmap.org/copyright"\n')
 
-        file.close()
+        buff.close()
 
     @staticmethod
     def compress(target="gtfs.zip"):
         "Compress all created files to gtfs.zip"
         with zipfile.ZipFile(target, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for file in os.listdir("gtfs"):
-                if file.endswith(".txt"):
-                    archive.write(os.path.join("gtfs", file), arcname=file)
+            for entry in os.scandir("gtfs"):
+                if entry.name.endswith(".txt"):
+                    archive.write(entry.path, arcname=entry.name)
 
     @classmethod
-    def create(cls, version="", shapes=False, metro=False, prevver="", targetfile="gtfs.zip", clear_shape_errors=True):
+    def create(cls, version="", shapes=False, metro=False, prevver="", targetfile="gtfs.zip",
+               clear_shape_errors=True):
+
+        self = cls(shapes)
+
         print("\033[1A\033[K" + "Downloading file")
         download_time = datetime.today().strftime("%Y-%m-%d %H:%M:%S")
-        self = cls(version, shapes)
+        self.get_file(version)
 
         if prevver == self.version:
             self.reader.close()
             print("\033[1A\033[K" + "File matches the 'prevver' argument, aborting!")
             return
 
-        print("\033[1A\033[K" + "Starting parser...")
-        self.parse()
+        self.open_files()
+
+        try:
+            print("\033[1A\033[K" + "Starting parser...")
+            self.parse()
+
+        finally:
+
+            self.close_files()
+            self.shapes.close()
 
         print("\033[1A\033[K" + "Parser finished working, closing TXT file")
         self.reader.close()
-        self.dump_missing_stops()
 
         print("\033[1A\033[K" + "Creating static files")
         self.static_files(bool(self.shapes), self.version, download_time)
