@@ -92,12 +92,11 @@ def alert_description(alert_soup, alert_type):
 
     # Clean text from HTML tags
     clean_desc = no_html(
-        desc_with_tags              \
-            .replace("</p>", "\n")  \
-            .replace("<br/>", "\n") \
-            .replace("<br>", "\n")  \
-            .replace("\xa0", " ")   \
-            .replace("  ", " ")     \
+        desc_with_tags.replace("</p>", "\n")
+                      .replace("<br/>", "\n")
+                      .replace("<br>", "\n")
+                      .replace("\xa0", " ")
+                      .replace("  ", " ")
     ).strip()
 
     return clean_desc, desc_with_tags
@@ -165,7 +164,9 @@ def load_api_positions(apikey, request_type):
             "resource_id": "f2e5503e-927d-4ad3-9500-4ab9e55deb59",
             "apikey": apikey,
             "type": request_type,
-    })
+        }
+    )
+
     api_response.raise_for_status()
     api_response = api_response.json()
 
@@ -185,9 +186,11 @@ class WarsawGtfs:
     def __init__(self, gtfs_location):
         self.routes = {"0": set(), "1": set(), "2": set(), "3": set()}
         self.stops = {}
+        self.trips = {}
         self.services = set()
 
-        if gtfs_location.startswith("https://") or gtfs_location.startswith("ftp://") or gtfs_location.startswith("http://"):
+        if gtfs_location.startswith("https://") or gtfs_location.startswith("ftp://") \
+                or gtfs_location.startswith("http://"):
             gtfs_request = requests.get(gtfs_location)
             self.gtfs = TemporaryFile()
             self.gtfs.write(gtfs_request.content)
@@ -209,23 +212,35 @@ class WarsawGtfs:
     def list_routes(self):
         with self.arch.open("routes.txt", mode="r") as buffer:
             for row in csv.DictReader(io.TextIOWrapper(buffer, encoding="utf8", newline="")):
-                if row["route_type"] not in self.routes: continue
-                else: self.routes[row["route_type"]].add(row["route_id"])
+
+                if row["route_type"] not in self.routes:
+                    continue
+                else:
+                    self.routes[row["route_type"]].add(row["route_id"])
 
     def list_services(self):
         today = datetime.today().strftime("%Y%m%d")
 
         with self.arch.open("calendar_dates.txt", mode="r") as buffer:
             for row in csv.DictReader(io.TextIOWrapper(buffer, encoding="utf8", newline="")):
-                if row["date"] == today: self.services.add(row["service_id"])
+
+                if row["date"] == today:
+                    self.services.add(row["service_id"])
 
     def list_stops(self):
         with self.arch.open("stops.txt", mode="r") as buffer:
             for row in csv.DictReader(io.TextIOWrapper(buffer, encoding="utf8", newline="")):
-                self.stops[row["stop_id"]] = [row["stop_lat"], row["stop_lon"]] # list, not tuple because of json module
+                # Lists required for the JSON module
+                self.stops[row["stop_id"]] = [row["stop_lat"], row["stop_lon"]]
 
-    def list(self):
+    def list_trips(self):
+        with self.arch.open("stops.txt", mode="r") as buffer:
+            for row in csv.DictReader(io.TextIOWrapper(buffer, encoding="utf8", newline="")):
+                self.trips[row["trip_id"]] = (row["route_id"], row["service_id"])
+
+    def list_all(self):
         self.list_stops()
+        self.list_trips()
         self.list_routes()
         self.list_services()
 

@@ -16,21 +16,21 @@ import re
 import os
 import io
 
-from .utils_realtime import *
-from .utils import *
+from .utils_realtime import alert_flags, alert_data, alert_description, later_in_time, \
+    parse_apium_response, load_api_positions, WarsawGtfs
 
+from .utils import haversine, initial_bearing
 
-# Main Functions
 class Realtime:
 
     @staticmethod
-    def alerts(gtfs_location="https://mkuran.pl/gtfs/warsaw.zip", out_proto=True, binary_proto=True, out_json=False):
+    def alerts(gtfs_location="https://mkuran.pl/gtfs/warsaw.zip", out_proto=True,
+               binary_proto=True, out_json=False):
         "Get ZTM Warszawa Alerts"
         # Grab Entries
         changes_req = requests.get("https://www.wtp.waw.pl/feed/?post_type=change")
         impediments_req = requests.get("https://www.wtp.waw.pl/feed/?post_type=impediment")
         gtfs_routes = WarsawGtfs.routes_only(gtfs_location)
-        idenum = 0
 
         # Get Alerts into etrees
         changes_req.encoding = "utf-8"
@@ -48,19 +48,22 @@ class Realtime:
             header.timestamp = round(datetime.today().timestamp())
 
         if out_json:
-            json_container = {"time": datetime.today().strftime("%Y-%m-%d %H:%M:%S"), "alerts": []}
+            json_container = {
+                "time": datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
+                "alerts": []
+            }
 
         # Sort Entries
         all_entries = []
         for i in impediments.findall("channel/item"):
             data = alert_data(i, alert_type="impediment")
-            data["effect"] = 2 # Reduced Service
+            data["effect"] = 2  # Reduced Service
 
             all_entries.append(data)
 
         for i in changes.findall("channel/item"):
             data = alert_data(i, alert_type="change")
-            data["effect"] = 7 # Other Effect
+            data["effect"] = 7  # Other Effect
 
             all_entries.append(data)
 
@@ -74,21 +77,27 @@ class Realtime:
             soup = BeautifulSoup(alert_website.text, "html.parser")
 
             # Get routes for this alert
-            entry["routes"] = [i for i in entry["routes"] if \
-                i in gtfs_routes["0"] or \
-                i in gtfs_routes["1"] or \
-                i in gtfs_routes["2"] or \
-                i in gtfs_routes["3"]
-            ]
+            entry["routes"] = [i for i in entry["routes"] if
+                               i in gtfs_routes["0"]
+                               or i in gtfs_routes["1"]
+                               or i in gtfs_routes["2"]
+                               or i in gtfs_routes["3"]]
 
             # Add routes if those are not specified
             if not entry["routes"]:
                 flags = alert_flags(soup, entry["effect"])
 
-                if "metro" in flags: entry["routes"].extend(gtfs_routes["1"])
-                elif "tramwaje" in flags: entry["routes"].extend(gtfs_routes["0"])
-                elif flags.intersection("kolej", "skm"): entry["routes"].extend(gtfs_routes["2"])
-                elif "autobusy" in flags: entry["routes"].extend(gtfs_routes["3"])
+                if "metro" in flags:
+                    entry["routes"].extend(gtfs_routes["1"])
+
+                elif "tramwaje" in flags:
+                    entry["routes"].extend(gtfs_routes["0"])
+
+                elif flags.intersection("kolej", "skm"):
+                    entry["routes"].extend(gtfs_routes["2"])
+
+                elif "autobusy" in flags:
+                    entry["routes"].extend(gtfs_routes["3"])
 
             desc, desc_html = alert_description(soup, entry["effect"])
 
@@ -139,13 +148,16 @@ class Realtime:
 
         # Export
         if out_proto and binary_proto:
-            with open("gtfs-rt/alerts.pb", "wb") as f: f.write(container.SerializeToString())
+            with open("gtfs-rt/alerts.pb", "wb") as f:
+                f.write(container.SerializeToString())
 
         elif out_proto:
-            with open("gtfs-rt/alerts.pb", "w") as f: f.write(str(container))
+            with open("gtfs-rt/alerts.pb", "w") as f:
+                f.write(str(container))
 
         if out_json:
-            with open("gtfs-rt/alerts.json", "w", encoding="utf8") as f: json.dump(json_container, f, indent=2, ensure_ascii=False)
+            with open("gtfs-rt/alerts.json", "w", encoding="utf8") as f:
+                json.dump(json_container, f, indent=2, ensure_ascii=False)
 
     @staticmethod
     def brigades(apikey, gtfs_location="https://mkuran.pl/gtfs/warsaw.zip", export=False):
@@ -162,35 +174,24 @@ class Realtime:
         gtfs = WarsawGtfs(gtfs_location)
 
         print("Reading routes, services and stops from GTFS")
-        gtfs.list()
+        gtfs.list_all()
 
         # We need only route_ids of trams and buses — other are not needed for brigades
         gtfs.routes = gtfs.routes["0"] | gtfs.routes["3"]
 
         print("Matching stop_times.txt to brigades", end="\n\n")
+
         # And now open stop_times and match trip_id with brigade,
-        # by matching route_id+stop_id+departure_time with api.um.warszawa.pl schedules, which have brigade number
+        # by matching route_id+stop_id+departure_time with api.um.warszawa.pl schedules,
+        # which have brigade number
+
         with gtfs.arch.open("stop_times.txt", mode="r") as stoptimes:
             reader = csv.DictReader(io.TextIOWrapper(stoptimes, encoding="utf8", newline=""))
 
             for row in reader:
 
                 trip_id = row["trip_id"]
-                trip_id_split = trip_id.split("/")
-
-                # e.g RA190507/1/TD-3BAN/DP/04.01_ from merged GTFS
-                if len(trip_id_split) == 5:
-                    route_id = trip_id_split[1]
-                    service_id = trip_id_split[0] + "/" + trip_id_split[3]
-
-                # e.g 1/TD-3BAN/DP/04.01_ from normal GTFS
-                elif len(trip_id_split) == 4:
-                    route_id = trip_id_split[0]
-                    service_id = trip_id_split[2]
-
-                # Unrecognized format (probably from metro) - ignore
-                else:
-                    continue
+                route_id, service_id = gtfs.trips.get(trip_id)
 
                 # Ignore nonactive routes & services
                 if route_id not in gtfs.routes or service_id not in gtfs.services:
@@ -201,19 +202,27 @@ class Realtime:
                 stop_index = int(row["stop_sequence"])
                 timepoint = row["departure_time"]
 
-                print("\033[1A\033[K" + "Next stop_time row: T:", trip_id, "I:", stop_index, "({})".format(timepoint))
+                print("\033[1A\033[K"
+                      + "Next stop_time row: "
+                      + f"T: {trip_id} I: {stop_index} ({timepoint})")
 
-                # If considered timepoint of a trip happens »later« then what's stored in trip_last_points
-                # Then write current stoptime info as »last_stop of a trip«
+                # If considered timepoint of a trip happens »later«,
+                # then what's stored in trip_last_points => overwrite last stop of trip
                 if trip_last_points.get(trip_id, {}).get("index", -1) < stop_index:
-                    trip_last_points[trip_id] = {"stop": stop_id, "index": stop_index, "timepoint": timepoint}
+                    trip_last_points[trip_id] = {
+                        "stop": stop_id,
+                        "index": stop_index,
+                        "timepoint": timepoint
+                    }
 
                 # If there's no brigade for this trip, try to match it
                 if trip_id not in matched_trips:
                     if (route_id, stop_id) not in api_responses:
 
                         try:
-                            print("\033[1A\033[K" + "Making new API call: R:", route_id, "S:", stop_id)
+                            print("\033[1A\033[K" + "Making new API call: "
+                                  + f"R: {route_id} S: {stop_id}")
+
                             api_request = requests.get(
                                 "https://api.um.warszawa.pl/api/action/dbtimetable_get/",
                                 timeout=5,
@@ -223,13 +232,17 @@ class Realtime:
                                     "busstopId": stop_id[:4],
                                     "busstopNr": stop_id[4:6],
                                     "line": route_id
-                            })
+                                }
+                            )
+
                             api_request.raise_for_status()
-
-                            print("\033[1A\033[K" + "Reading recived API response for: R:", route_id, "S:", stop_id)
-
+                            print("\033[1A\033[K" + "Reading recived API response for: "
+                                  + f"R: {route_id} S: {stop_id}")
                             api_response = api_request.json()
-                            assert type(api_response["result"]) is list
+
+                            if not isinstance(api_response["result"], list):
+                                raise ValueError("api result is not a list!")
+
                             result = parse_apium_response(api_response)
 
                         except requests.exceptions.Timeout:
@@ -271,12 +284,16 @@ class Realtime:
                     else:
                         brigade_id = ""
 
-                    if not brigade_id: continue
+                    if not brigade_id:
+                        continue
 
                     matched_trips.add(trip_id)
 
-                    if route_id not in brigades: brigades[route_id] = {}
-                    if brigade_id not in brigades[route_id]: brigades[route_id][brigade_id] = []
+                    if route_id not in brigades:
+                        brigades[route_id] = {}
+
+                    if brigade_id not in brigades[route_id]:
+                        brigades[route_id][brigade_id] = []
 
                     brigades[route_id][brigade_id].append({"trip_id": trip_id})
 
@@ -288,7 +305,8 @@ class Realtime:
         print("Appending info about last timepoint to brigade")
         for route in brigades:
             for brigade in brigades[route]:
-                brigades[route][brigade] = sorted(brigades[route][brigade], key=lambda i: i["trip_id"].split("/")[-1])
+                brigades[route][brigade] = sorted(brigades[route][brigade],
+                                                  key=lambda i: i["trip_id"].split("/")[-1])
 
                 for trip in brigades[route][brigade]:
                     trip_last_point = trip_last_points[trip["trip_id"]]
@@ -306,7 +324,8 @@ class Realtime:
         return brigades
 
     @staticmethod
-    def positions(apikey, brigades="https://mkuran.pl/gtfs/warsaw/brigades.json", previous={}, out_proto=True, binary_proto=True, out_json=False):
+    def positions(apikey, brigades="https://mkuran.pl/gtfs/warsaw/brigades.json", previous={},
+                  out_proto=True, binary_proto=True, out_json=False):
         "Get ZTM Warszawa positions"
         # Variables
         positions = OrderedDict()
@@ -328,7 +347,8 @@ class Realtime:
 
         # Get brigades, if brigades is not already a dict or OrderedDict
         if type(brigades) is str:
-            if brigades.startswith("ftp://") or brigades.startswith("http://") or brigades.startswith("https://"):
+            if brigades.startswith("ftp://") or brigades.startswith("http://") \
+                    or brigades.startswith("https://"):
                 brigades_request = requests.get(brigades)
                 brigades = brigades_request.json()
             else:
@@ -345,8 +365,8 @@ class Realtime:
                     )
 
         # Load data from API UM
-        source += load_api_positions(apikey, "1") # Bus posiions
-        source += load_api_positions(apikey, "2") # Tram positions
+        source += load_api_positions(apikey, "1")  # Bus posiions
+        source += load_api_positions(apikey, "2")  # Tram positions
 
         # Iterate over results
         for v in source:
@@ -355,21 +375,31 @@ class Realtime:
             tstamp = datetime.strptime(v["Time"], "%Y-%m-%d %H:%M:%S")
             trip_id = None
             bearing = None
-            id = "/".join(["V", route, brigade])
+            vehicle_id = "/".join(["V", route, brigade])
             triplist = brigades.get(route, {}).get(brigade, [])
-            if not triplist: continue
+
+            if not triplist:
+                continue
 
             # Do not care about obsolete data
-            if (datetime.today() - tstamp) > timedelta(minutes=10): continue
+            if (datetime.today() - tstamp) > timedelta(minutes=10):
+                continue
 
-            # Try to match with trip based on the difference where the vehicle was previously and where it is now
-            if id in previous:
-                prev_trip, prev_lat, prev_lon, prev_bearing = previous[id]["trip_id"], previous[id]["lat"], previous[id]["lon"], previous[id].get("bearing", None)
+            # Try to match with trip based on the difference between vehicle positons
+            previous_veh_data = previous.get(vehicle_id)
+
+            if previous_veh_data is None:
+                prev_trip = previous_veh_data["trip_id"]
+                prev_lat = previous_veh_data["lat"]
+                prev_lon = previous_veh_data["lon"]
+                prev_bearing = previous[vehicle_id].get("bearing", None)
+
                 tripidslist = [x["trip_id"] for x in triplist]
 
                 # Get vehicle bearing
                 bearing = initial_bearing([prev_lat, prev_lon], [lat, lon])
-                if (not bearing) and prev_bearing: bearing = prev_bearing
+                if (not bearing) and prev_bearing:
+                    bearing = prev_bearing
 
                 # If vehicle was doing its last trip, there's nothing more that can be calculated
                 if prev_trip == triplist[-1]["trip_id"]:
@@ -378,19 +408,24 @@ class Realtime:
                 # The calculations require for the prev_trip to be in the triplist
                 elif prev_trip in tripidslist:
                     prev_trip_index = tripidslist.index(prev_trip)
-                    prev_trip_last_latlon = list(map(float, triplist[prev_trip_index]["last_stop_latlon"]))
+                    prev_trip_last_latlon = [float(i) for i in
+                                             triplist[prev_trip_index]["last_stop_latlon"]]
 
-                    # If vehicle is near (50m) the last stop => the trip has finished => assume the next trip
-                    # Or if the previous trip should've finished 30min earlier (A fallback rule if the previous cause has failed)
-                    # FIXME: Some trips pass around last stop more then one time (see 146/TP-FAL-W) (a loop-the-loop near end terminus)
-                    if haversine([lat, lon], prev_trip_last_latlon) <= 0.05 or \
-                        later_in_time(triplist[prev_trip_index]["last_stop_timepoint"], (datetime.now()-timedelta(minutes=30)).strftime("%H:%M:%S")):
+                    trip_near_terminus = haversine([lat, lon], prev_trip_last_latlon) <= 0.05
+                    trip_shouldve_finished = later_in_time(
+                        triplist[prev_trip_index]["last_stop_timepoint"],
+                        (datetime.now() - timedelta(minutes=30)).strftime("%H:%M:%S")
+                    )
+
+                    # If vehicle is near (50m) the last stop => the trip has finished
+                    # Or if the previous trip should've finished 30min earlier (fallback)
+                    # FIXME: Some trips pass around last stop more then one time (see 146/TP-FAL-W)
+                    if trip_near_terminus or trip_shouldve_finished:
                         trip_id = triplist[prev_trip_index + 1]["trip_id"]
                     else:
                         trip_id = prev_trip
 
             # If this vehicle wasn't defined previously we have to assume it's running on time
-            # (Or rather I'm to lazy to think of a way to match it to current trip_id, and the current algorithm works just fine)
             if not trip_id:
                 currtime = datetime.now().strftime("%H:%M:%S")
                 for trip in triplist:
@@ -404,27 +439,32 @@ class Realtime:
 
             # Save to dict
             data = {
-                "id": id,
+                "id": vehicle_id,
                 "trip_id": trip_id,
                 "timestamp": tstamp,
                 "lat": lat,
                 "lon": lon
             }
-            if bearing: data["bearing"] = bearing
 
-            positions[id] = data
+            if bearing:
+                data["bearing"] = bearing
+
+            positions[vehicle_id] = data
 
             # Save to gtfs_rt container
             if out_proto:
                 entity = container.entity.add()
-                entity.id = id
+                entity.id = vehicle_id
+
                 vehicle = entity.vehicle
+                vehicle.timestamp = round(tstamp.timestamp())
                 vehicle.trip.trip_id = trip_id
-                vehicle.vehicle.id = id
+                vehicle.vehicle.id = vehicle_id
+
                 vehicle.position.latitude = float(lat)
                 vehicle.position.longitude = float(lon)
-                if bearing: vehicle.position.bearing = float(bearing)
-                vehicle.timestamp = round(tstamp.timestamp())
+                if bearing:
+                    vehicle.position.bearing = float(bearing)
 
         # Export results
         if out_proto and binary_proto:
@@ -439,6 +479,8 @@ class Realtime:
             for i in map(copy, positions.values()):
                 i["timestamp"] = i["timestamp"].isoformat()
                 json_container["positions"].append(i)
-            with open("gtfs-rt/vehicles.json", "w", encoding="utf8") as f: json.dump(json_container, f, indent=2, ensure_ascii=False)
+
+            with open("gtfs-rt/vehicles.json", "w", encoding="utf8") as f:
+                json.dump(json_container, f, indent=2, ensure_ascii=False)
 
         return positions
