@@ -388,7 +388,7 @@ class Realtime:
             # Try to match with trip based on the difference between vehicle positons
             previous_veh_data = previous.get(vehicle_id)
 
-            if previous_veh_data is None:
+            if previous_veh_data is not None:
                 prev_trip = previous_veh_data["trip_id"]
                 prev_lat = previous_veh_data["lat"]
                 prev_lon = previous_veh_data["lon"]
