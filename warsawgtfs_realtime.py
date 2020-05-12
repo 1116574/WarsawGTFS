@@ -1,7 +1,7 @@
 import argparse
 import os
 
-from src import *
+from src import Realtime
 
 # A simple interface
 if __name__ == "__main__":
@@ -19,7 +19,8 @@ if __name__ == "__main__":
 
     args = argprs.parse_args()
 
-    if not os.path.exists("gtfs-rt"): os.mkdir("gtfs-rt")
+    if not os.path.exists("gtfs-rt"):
+        os.mkdir("gtfs-rt")
 
     if (args.brigades or args.positions) and (not args.key):
         raise ValueError("Apikey is required for brigades/positions")
