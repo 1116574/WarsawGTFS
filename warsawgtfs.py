@@ -17,6 +17,9 @@ if __name__ == "__main__":
     argprs.add_argument("--reparse", action="store_true", required=False, dest="reparse", help="force re-creation of individual GTFS files (only valid with --merge)")
     argprs.add_argument("--maxfiles", action="store", required=False, dest="maxfiles", default=10, help="how many future files should be merged (only valid with --merge)")
 
+    argprs.add_argument("-pn", "--publisher-name", default="", required=False, metavar="NAME", help="value of feed_publisher_name (--publisher-url is also required to create feed_info)")
+    argprs.add_argument("-pu", "--publisher-url", default="", required=False, metavar="URL", help="value of feed_publisher_url (--publisher-name is also required to create feed_info)")
+
     args = argprs.parse_args()
     print("""
     . . .                         ,---.--.--,---.,---.
@@ -33,11 +36,15 @@ if __name__ == "__main__":
 
     if args.merge:
         print("=== Creating a GTFS file for all future schedules ===")
-        version = MultiDay.create(maxfiles=args.maxfiles, shapes=args.shapes, metro=args.metro, remerge=args.remerge, reparse=args.reparse)
+        version = MultiDay.create(maxfiles=args.maxfiles, shapes=args.shapes, metro=args.metro,
+                                  remerge=args.remerge, reparse=args.reparse,
+                                  pub_name=args.publisher_name, pub_url=args.publisher_url)
 
     else:
         print("=== Creating a GTFS file for the current schedule ===")
-        version = Converter.create(version=args.version, shapes=args.shapes, metro=args.metro, prevver=args.prevver)
+        version = Converter.create(version=args.version, shapes=args.shapes,
+                                   metro=args.metro, prevver=args.prevver,
+                                   pub_name=args.publisher_name, pub_url=args.publisher_url)
 
     print("=== Finished making GTFS (ver {}) ===".format(version))
     print("Time elapsed: {:.3f} s".format(time.time() - st))

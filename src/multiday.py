@@ -132,8 +132,7 @@ class MultiDay:
                     version=version,
                     shapes=parser_shapes,
                     metro=False,
-                    targetfile=os.path.join("feeds", version+".zip"),
-                    clear_shape_errors=False
+                    targetfile=os.path.join("feeds", version+".zip")
                 )
 
             print("\033[2A\033[K" + "All missing files created")
@@ -353,7 +352,8 @@ class MultiDay:
         file.close()
 
     @classmethod
-    def create(cls, maxfiles=10, shapes=False, metro=True, targetfile="gtfs.zip", remerge=True, reparse=False):
+    def create(cls, maxfiles=10, shapes=False, metro=True, targetfile="gtfs.zip", remerge=True,
+               reparse=False, pub_name="", pub_url=""):
 
         print("Acquiring list of required files")
         self = cls()
@@ -379,7 +379,7 @@ class MultiDay:
 
             print("\033[1A\033[K" + "Creating static files")
             version = "/".join([i["ver"] for i in self.files])
-            Converter.static_files(shapes, version, download_time)
+            Converter.static_files(shapes, version, download_time, pub_name, pub_url)
 
             if metro:
                 print("\033[1A\033[K" + "Adding metro")

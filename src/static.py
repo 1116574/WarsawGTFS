@@ -22,6 +22,7 @@ from .utils import clear_directory, avg_position
 
 from .parser import Parser
 
+
 class StopHandler:
     def __init__(self):
         # Stop data
@@ -322,6 +323,7 @@ class StopHandler:
         with open("missing_stops.json", "w") as f:
             json.dump({"missing": sorted(self.used_invalid), "unused": sorted(unused_missing)},
                       f, indent=2)
+
 
 class Converter:
     def __init__(self, shapes=False, clear_shape_errors=True):
@@ -691,7 +693,7 @@ class Converter:
         self.stops.export()
 
     @staticmethod
-    def static_files(shapes, version, download_time):
+    def static_files(shapes, version, download_time, pub_name="", pub_url=""):
         "Create files that don't depend of ZTM file content"
         buff = open("gtfs/agency.txt", mode="w", encoding="utf8", newline="\r\n")
         buff.write('agency_id,agency_name,agency_url,agency_timezone,agency_lang,agency_phone,'
@@ -701,24 +703,26 @@ class Converter:
                    '19 115,"https://www.wtp.waw.pl/ceny-i-rodzaje-biletow/"\n')
         buff.close()
 
-        buff = open("gtfs/feed_info.txt", mode="w", encoding="utf8", newline="\r\n")
-        buff.write('feed_publisher_name,feed_publisher_url,feed_lang,feed_version\n')
-        buff.write('"WarsawGTFS (provided by Mikołaj Kuranowski)",'
-                   f'"https://github.com/MKuranowski/WarsawGTFS",pl,{version}\n')
-        buff.close()
+        # Feed Info
+        if pub_name and pub_url:
+            pub_name = '"' + pub_name.replace('"', '""') + '"'
+            pub_url = '"' + pub_url.replace('"', '""') + '"'
+
+            buff = open("gtfs/feed_info.txt", mode="w", encoding="utf-8", newline="\r\n")
+            buff.write("feed_publisher_name,feed_publisher_url,feed_lang,feed_version\n")
+            buff.write(",".join([pub_name, pub_url, "pl", version]) + "\n")
+            buff.close()
 
         buff = open("gtfs/attributions.txt", mode="w", encoding="utf8", newline="\r\n")
-        buff.write('attribution_id,organization_name,is_producer,is_operator,is_authority,'
+        buff.write('organization_name,is_producer,is_operator,is_authority,'
                    'is_data_source,attribution_url\n')
-        buff.write('0,"WarsawGTFS (provided by Mikołaj Kuranowski)",pl,1,0,0,'
-                   '0,"https://github.com/MKuranowski/WarsawGTFS"\n')
-
-        buff.write(f'1,"ZTM Warszawa (retrieved {download_time})",pl,0,0,1,'
-                   '1,"https://ztm.waw.pl"\n')
+        buff.write(f'"Data provided by: ZTM Warszawa (retrieved {download_time})",pl,0,0,1,'
+                   '1,"https://www.ztm.waw.pl/pliki-do-pobrania/dane-rozkladowe/"\n')
 
         if shapes:
-            buff.write('2,"Bus shapes (under ODbL licnese): © OpenStreetMap contributors",pl,'
-                       '0,0,1,1,"https://www.openstreetmap.org/copyright"\n')
+            buff.write('"Bus shapes based on data by: © OpenStreetMap contributors '
+                       f'(retrieved {download_time})",'
+                       '0,0,1,1,"https://www.openstreetmap.org/copyright/"\n')
 
         buff.close()
 
@@ -732,7 +736,7 @@ class Converter:
 
     @classmethod
     def create(cls, version="", shapes=False, metro=False, prevver="", targetfile="gtfs.zip",
-               clear_shape_errors=True):
+               pub_name="", pub_url=""):
 
         self = cls(shapes)
 
@@ -761,7 +765,7 @@ class Converter:
         self.reader.close()
 
         print("\033[1A\033[K" + "Creating static files")
-        self.static_files(bool(self.shapes), self.version, download_time)
+        self.static_files(bool(self.shapes), self.version, download_time, pub_name, pub_url)
 
         if metro:
             print("\033[1A\033[K" + "Adding metro")
