@@ -721,7 +721,7 @@ class Converter:
 
         if shapes:
             buff.write('"Bus shapes based on data by: © OpenStreetMap contributors '
-                       f'(retrieved {download_time})",'
+                       f'(retrieved {download_time}, under ODbL license)",'
                        '0,0,1,1,"https://www.openstreetmap.org/copyright/"\n')
 
         buff.close()
