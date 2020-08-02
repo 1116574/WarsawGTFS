@@ -263,7 +263,7 @@ class Realtime:
                             )
                             continue
 
-                        except (json.decoder.JSONDecodeError, AssertionError):
+                        except (json.decoder.JSONDecodeError, AssertionError, ValueError):
                             print(
                                 "\033[1A\033[K\033[1m"
                                 f"Incorrent API response for R: {route_id} S: {stop_id}:\033[0m\n"
