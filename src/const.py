@@ -52,5 +52,5 @@ PROPER_STOP_NAMES = {
     "2005": "Praga-Płd. - Ratusz",           "1541": "Marki Bandurskiego I",
     "5001": "Połczyńska - Parking P+R",      "2296": "Szosa Lubelska",
     "6201": "Lipków Paschalisa-Jakubowicza", "1226": "Mańki-Wojody",
-    "2324": "Wiązowna",
+    "2324": "Wiązowna",                      "4400": "Mobilis Sp. z.o.o.",
 }
