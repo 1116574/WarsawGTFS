@@ -10,6 +10,7 @@ Either geographical ones, or
 utilities that could be used by both static and realtime parsers
 """
 
+
 @contextmanager
 def time_limit(sec):
     "Time limter based on https://gist.github.com/Rabbit52/7449101"
@@ -22,6 +23,7 @@ def time_limit(sec):
     finally:
         signal.alarm(0)
 
+
 def clear_directory(directory):
     if not os.path.exists(directory):
         os.mkdir(directory)
@@ -32,6 +34,7 @@ def clear_directory(directory):
             else:
                 os.remove(f.path)
 
+
 def haversine(pt1, pt2):
     "Calculate haversine distance (in km)"
     lat1, lon1 = map(math.radians, pt1)
@@ -41,6 +44,7 @@ def haversine(pt1, pt2):
     d = math.sin(lat * 0.5) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(lon * 0.5) ** 2
     return 2 * 6371 * math.asin(math.sqrt(d))
 
+
 def iter_haversine(points):
     "Calculate total route distance"
     total = 0.0
@@ -48,12 +52,14 @@ def iter_haversine(points):
         total += haversine(points[i - 1], points[i])
     return total
 
+
 def avg_position(stops_in_group):
     lats = [float(i[0]) for i in stops_in_group.values()]
     lons = [float(i[1]) for i in stops_in_group.values()]
     avg_lat = round(sum(lats) / len(lats), 8)
     avg_lon = round(sum(lons) / len(lons), 8)
     return avg_lat, avg_lon
+
 
 def initial_bearing(pos1, pos2):
     "Calculate initial bearing of vehicle, only if the vehicle has moved more than 30m"
