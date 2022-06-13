@@ -22,6 +22,7 @@ _BASE_GIST = "https://raw.githubusercontent.com/MKuranowski/WarsawGTFS/master/da
 GIST_MISSING_STOPS = _BASE_GIST + "missing_stop_locations.json"
 GIST_RAIL_PLATFORMS = _BASE_GIST + "rail_platforms.json"
 GIST_STOP_NAMES = _BASE_GIST + "stop_names.json"
+WARSAW_MISSING_STOPS = "https://api.um.warszawa.pl/api/action/dbstore_get?id=ab75c33d-3a26-4342-b36a-6e5fef0a3ac3"
 
 RAILWAY_MAP = "https://raw.githubusercontent.com/MKuranowski/PLRailMap/master/plrailmap.osm"
 

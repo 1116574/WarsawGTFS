@@ -10,7 +10,7 @@ from typing import (Any, Callable, Dict, Iterable, List, Optional, Sequence,
 import requests
 
 from ..const import (ACTIVE_RAIL_STATIONS, GIST_MISSING_STOPS, GIST_STOP_NAMES,
-                     HEADERS, RAILWAY_MAP)
+                     WARSAW_MISSING_STOPS, HEADERS, RAILWAY_MAP)
 from ..parser.dataobj import ZTMStop, ZTMStopGroup
 from .rail_stations import RailwayStation, RailwayStationLoader
 
@@ -77,10 +77,19 @@ def avg_position(stops: Sequence[ZTMStop]) -> Optional[Tuple[float, float]]:
 
 @lru_cache(maxsize=None)
 def get_missing_stops() -> Dict[str, Tuple[float, float]]:
-    """Gets positions of stops from external gist, as ZTM sometimes omits stop coordinates"""
+    """Gets positions of stops from Warsaw-provided API and external gist, as ZTM sometimes omits stop coordinates"""
+    with requests.get(WARSAW_MISSING_STOPS) as req:
+        req.raise_for_status()
+        warsaw_api = req.json()
+    # Normalize response:
+    #             |             1001            +             01              |           lat                  |          lon
+    warsaw_api = {str(i["values"][0]["value"]) + str(i["values"][1]["value"]): [float(i["values"][4]["value"]), float(i["values"][5]["value"])] for i in warsaw_api["result"]}
+
     with requests.get(GIST_MISSING_STOPS) as req:
         req.raise_for_status()
-        return req.json()
+        gist = req.json()
+
+    return {**warsaw_api, **gist}  # gist takes precedence when conflicts occurs
 
 
 @lru_cache(maxsize=None)
